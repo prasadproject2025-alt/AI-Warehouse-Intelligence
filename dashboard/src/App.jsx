@@ -47,6 +47,16 @@ export default function App() {
   const [activeTaskId, setActiveTaskId] = useState(null);
 
   const videoRef = useRef(null);
+  const chatEndRef = useRef(null);
+
+  // Auto-scroll chat history to bottom like WhatsApp
+  useEffect(() => {
+    if (activeTab === 'assistant') {
+      setTimeout(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
+    }
+  }, [messages, isChatLoading, activeTab]);
 
   // Load initial videos and analytics
   useEffect(() => {
@@ -583,10 +593,12 @@ export default function App() {
                 </div>
               ))}
               {isChatLoading && (
-                <div className="chat-bubble assistant" style={{ color: 'var(--accent-cyan)' }}>
-                  Analyzing warehouse event database...
+                <div className="chat-bubble assistant" style={{ color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Analyzing warehouse event database...</span>
                 </div>
               )}
+              <div ref={chatEndRef} style={{ height: '1px' }} />
             </div>
 
             {/* Quick Prompts */}
