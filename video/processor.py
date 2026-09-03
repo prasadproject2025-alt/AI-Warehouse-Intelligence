@@ -144,8 +144,8 @@ class VideoProcessor:
                     recent_alert_banner = f"[{event.risk_level.value}] {event.behaviour_type.value.upper()}"
                     recent_alert_expiry = timestamp + 1.8
 
-            # Update live task status
-            if frame_idx % 15 == 0 and frame_count > 0:
+            # Update live task status frequently for smooth UI progress bar
+            if frame_idx % 2 == 0 and frame_count > 0:
                 TASK_STATUS[video_id]["current_frame"] = frame_idx
                 TASK_STATUS[video_id]["progress_percent"] = min(99, int((frame_idx / frame_count) * 100))
                 TASK_STATUS[video_id]["incidents_count"] = len(all_incidents)

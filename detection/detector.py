@@ -75,6 +75,7 @@ class WarehouseDetector:
         """
         results = self.model(
             frame,
+            imgsz=640,
             conf=self.conf_threshold,
             iou=self.iou_threshold,
             verbose=False
