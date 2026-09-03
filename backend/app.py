@@ -1,7 +1,7 @@
 """
 VisionGuard FastAPI Backend Service
 Provides REST endpoints for video ingestion, incident timelines, evidence retrieval,
-analytics summaries, and the grounded AI Supervisor Assistant.
+analytics summaries, background AI video processing, and grounded AI assistant.
 """
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
@@ -15,7 +15,7 @@ import shutil
 import uuid
 
 from backend.database.db import init_db, DatabaseManager
-from video.processor import VideoProcessor
+from video.processor import VideoProcessor, TASK_STATUS
 from assistant.llm import AIAssistant
 
 app = FastAPI(
@@ -24,7 +24,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS configuration for modern frontend integration
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -73,11 +73,12 @@ def health_check():
 def list_videos():
     videos = DatabaseManager.get_all_videos()
     for v in videos:
-        # Attach incident counts
+        # Attach incident counts & clean video URL
         incidents = DatabaseManager.get_incidents(video_id=v["id"])
         v["incident_count"] = len(incidents)
         v["critical_count"] = sum(1 for i in incidents if i["risk_level"] == "CRITICAL")
         v["high_count"] = sum(1 for i in incidents if i["risk_level"] == "HIGH")
+        v["video_url"] = f"/static/raw/{v['filename']}"
     return {"videos": videos}
 
 @app.get("/api/videos/{video_id}")
@@ -86,46 +87,85 @@ def get_video_details(video_id: str):
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     incidents = DatabaseManager.get_incidents(video_id=video_id)
+    video["video_url"] = f"/static/raw/{video['filename']}"
     return {
         "video": video,
         "incidents": incidents
     }
 
-@app.post("/api/videos/upload")
-async def upload_video(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
+@app.get("/api/videos/{video_id}/status")
+def get_video_processing_status(video_id: str):
     """
-    Upload a new warehouse video and trigger AI analysis.
+    Poll live processing percentage and status of background AI analysis.
+    """
+    if video_id in TASK_STATUS:
+        return TASK_STATUS[video_id]
+    
+    # Check if already in DB
+    video = DatabaseManager.get_video_by_id(video_id)
+    if video:
+        incidents = DatabaseManager.get_incidents(video_id=video_id)
+        return {
+            "video_id": video_id,
+            "filename": video["filename"],
+            "status": "completed",
+            "progress_percent": 100,
+            "incidents_count": len(incidents)
+        }
+    return {"status": "not_found", "progress_percent": 0}
+
+@app.post("/api/videos/upload")
+async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """
+    Upload a new warehouse video and trigger background AI analysis.
     """
     video_id = f"vid_{uuid.uuid4().hex[:8]}"
-    file_ext = os.path.splitext(file.filename)[1] or ".mp4"
-    save_path = os.path.join("data/raw", f"{video_id}_{file.filename}")
+    clean_filename = file.filename.replace(" ", "_")
+    save_path = os.path.join("data/raw", f"{clean_filename}")
     
     with open(save_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Process video
-    result = processor.process_video(
-        video_path=save_path,
-        video_id=video_id,
-        generate_annotated_video=True
+    TASK_STATUS[video_id] = {
+        "video_id": video_id,
+        "filename": clean_filename,
+        "status": "processing",
+        "progress_percent": 5,
+        "current_frame": 0,
+        "total_frames": 100,
+        "incidents_count": 0
+    }
+
+    # Execute AI processing in background task
+    background_tasks.add_task(
+        processor.process_video,
+        save_path,
+        video_id,
+        True,
+        2
     )
+
     return {
-        "message": "Video uploaded and analyzed successfully",
-        "result": result
+        "status": "processing",
+        "video_id": video_id,
+        "filename": clean_filename,
+        "message": f"Video '{file.filename}' uploaded successfully. AI analysis pipeline started."
     }
 
 @app.post("/api/videos/{video_id}/analyze")
-def analyze_video(video_id: str):
+def analyze_video(video_id: str, background_tasks: BackgroundTasks):
     video = DatabaseManager.get_video_by_id(video_id)
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    result = processor.process_video(
-        video_path=video["filepath"],
-        video_id=video_id,
-        generate_annotated_video=True
+    background_tasks.add_task(
+        processor.process_video,
+        video["filepath"],
+        video_id,
+        True,
+        2
     )
-    return result
+    return {"status": "processing", "video_id": video_id}
 
 @app.get("/api/incidents")
 def list_incidents(

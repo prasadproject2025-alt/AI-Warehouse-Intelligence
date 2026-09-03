@@ -17,7 +17,8 @@ import {
   ArrowRight,
   TrendingDown,
   Layers,
-  Sparkles
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 
 export default function App() {
@@ -39,9 +40,11 @@ export default function App() {
   const [inputQuery, setInputQuery] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
 
-  // Upload state
+  // Upload & processing state
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
+  const [activeTaskId, setActiveTaskId] = useState(null);
 
   const videoRef = useRef(null);
 
@@ -54,6 +57,45 @@ export default function App() {
     }, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  // Poll upload progress if task is active
+  useEffect(() => {
+    if (!activeTaskId) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/videos/${activeTaskId}/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        if (data.status === 'processing') {
+          setUploadProgress(data.progress_percent || 10);
+          setUploadStatus(`Analyzing frames with YOLOv8 & Behaviour Engine: ${data.progress_percent}% (Frame ${data.current_frame}/${data.total_frames}) — ${data.incidents_count} incidents identified so far.`);
+        } else if (data.status === 'completed') {
+          setUploadProgress(100);
+          setUploadStatus(`Processing Complete! Found ${data.incidents_count} handling incidents.`);
+          setActiveTaskId(null);
+          setIsUploading(false);
+          await fetchVideos();
+          await fetchAnalytics();
+          
+          // Switch to the newly analyzed video
+          const vidRes = await fetch(`/api/videos/${activeTaskId}`);
+          if (vidRes.ok) {
+            const vidData = await vidRes.json();
+            if (vidData.video) {
+              selectVideo(vidData.video);
+              setActiveTab('operations');
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error polling status", err);
+      }
+    }, 1500);
+
+    return () => clearInterval(pollInterval);
+  }, [activeTaskId]);
 
   const fetchVideos = async () => {
     try {
@@ -99,7 +141,7 @@ export default function App() {
   const seekToTimestamp = (sec) => {
     if (videoRef.current) {
       videoRef.current.currentTime = Math.max(0, sec - 0.2);
-      videoRef.current.play();
+      videoRef.current.play().catch(() => {});
     }
   };
 
@@ -137,7 +179,8 @@ export default function App() {
     if (!file) return;
 
     setIsUploading(true);
-    setUploadStatus(`Uploading and analyzing ${file.name} with YOLOv8 & Behaviour Engine...`);
+    setUploadProgress(5);
+    setUploadStatus(`Uploading ${file.name} to VisionGuard server...`);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -147,17 +190,17 @@ export default function App() {
         method: 'POST',
         body: formData
       });
+      
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`Server status ${res.status}: ${errText.substring(0, 100)}`);
+        throw new Error(`Server returned error: ${errText.substring(0, 100)}`);
       }
+      
       const data = await res.json();
-      setUploadStatus(`Success! Identified ${data.result.incidents_count} incidents in ${file.name}.`);
-      fetchVideos();
-      fetchAnalytics();
+      setUploadStatus(data.message || "Video upload accepted. Starting AI intelligence analysis...");
+      setActiveTaskId(data.video_id);
     } catch (err) {
-      setUploadStatus(`Upload error: ${err.message}`);
-    } finally {
+      setUploadStatus(`Upload failed: ${err.message}`);
       setIsUploading(false);
     }
   };
@@ -287,7 +330,9 @@ export default function App() {
                     className="main-video"
                     controls
                     playsInline
-                    src={`/static/processed/${selectedVideo.annotated_filepath?.split(/[/\\]/).pop() || selectedVideo.filename}`}
+                    preload="auto"
+                    key={selectedVideo.filename}
+                    src={`/static/raw/${selectedVideo.filename}`}
                   />
                 ) : (
                   <div style={{ color: 'var(--text-muted)' }}>Select or ingest a warehouse video to begin.</div>
@@ -296,7 +341,7 @@ export default function App() {
                 <div className="video-hud-overlay">
                   <span className="rec-badge">AI LIVE INFERENCE</span>
                   <span>720P HD @ 30 FPS</span>
-                  <span>BYTE-TRACK ID ACTIVE</span>
+                  <span>PERSISTENT TRACKING ACTIVE</span>
                 </div>
               </div>
 
@@ -599,17 +644,53 @@ export default function App() {
               id="video-file-input"
               style={{ display: 'none' }}
               onChange={handleFileUpload}
+              disabled={isUploading}
             />
             <label 
               htmlFor="video-file-input" 
               className="chat-send-btn"
-              style={{ display: 'inline-flex', padding: '12px 28px', fontSize: '0.95rem', cursor: 'pointer', margin: '0 auto' }}
+              style={{ 
+                display: 'inline-flex', 
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 28px', 
+                fontSize: '0.95rem', 
+                cursor: isUploading ? 'not-allowed' : 'pointer', 
+                margin: '0 auto',
+                opacity: isUploading ? 0.6 : 1
+              }}
             >
-              Select MP4 Video File
+              {isUploading ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  <span>Processing Video...</span>
+                </>
+              ) : (
+                <span>Select MP4 Video File</span>
+              )}
             </label>
 
+            {/* Progress Bar & Live Status */}
+            {isUploading && (
+              <div style={{ maxWidth: '600px', margin: '24px auto 0 auto' }}>
+                <div style={{ width: '100%', height: '10px', background: 'var(--bg-main)', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                  <div 
+                    style={{ 
+                      width: `${uploadProgress}%`, 
+                      height: '100%', 
+                      background: 'linear-gradient(90deg, #38bdf8, #2563eb)',
+                      transition: 'width 0.3s ease'
+                    }}
+                  />
+                </div>
+                <div style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--accent-cyan)', fontFamily: 'JetBrains Mono' }}>
+                  {uploadProgress}% Completed
+                </div>
+              </div>
+            )}
+
             {uploadStatus && (
-              <div style={{ marginTop: '20px', padding: '14px', background: 'var(--bg-surface)', borderRadius: '8px', maxWidth: '600px', margin: '20px auto 0 auto', color: 'var(--accent-cyan)', fontFamily: 'JetBrains Mono', fontSize: '0.85rem' }}>
+              <div style={{ marginTop: '16px', padding: '14px', background: 'var(--bg-surface)', borderRadius: '8px', maxWidth: '600px', margin: '16px auto 0 auto', color: 'var(--text-main)', fontFamily: 'JetBrains Mono', fontSize: '0.85rem', lineHeight: '1.4' }}>
                 {uploadStatus}
               </div>
             )}

@@ -17,6 +17,9 @@ from behaviour.base import BehaviourEvent
 from video.evidence import draw_hud_overlay, draw_track_annotations, create_evidence_snapshot
 from backend.database.db import DatabaseManager
 
+# Global progress tracking for asynchronous analysis
+TASK_STATUS: Dict[str, Dict[str, Any]] = {}
+
 class VideoProcessor:
     def __init__(
         self,
@@ -36,7 +39,7 @@ class VideoProcessor:
         video_path: str,
         video_id: Optional[str] = None,
         generate_annotated_video: bool = True,
-        frame_skip: int = 1 # 1 = process every frame, 2 = every other frame for high throughput
+        frame_skip: int = 2 # 2 = process 15 FPS for high speed & responsiveness
     ) -> Dict[str, Any]:
         """
         Run end-to-end pipeline on input video.
@@ -46,6 +49,16 @@ class VideoProcessor:
         if not video_id:
             video_id = f"vid_{uuid.uuid4().hex[:8]}"
 
+        TASK_STATUS[video_id] = {
+            "video_id": video_id,
+            "filename": filename,
+            "status": "processing",
+            "progress_percent": 0,
+            "current_frame": 0,
+            "total_frames": 0,
+            "incidents_count": 0
+        }
+
         cap = cv2.VideoCapture(video_path)
         assert cap.isOpened(), f"Cannot open video: {video_path}"
 
@@ -54,6 +67,8 @@ class VideoProcessor:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         duration = frame_count / fps if fps > 0 else 0.0
+
+        TASK_STATUS[video_id]["total_frames"] = frame_count
 
         # Scenario heuristics based on filename
         is_wet = "wet" in filename.lower()
@@ -84,55 +99,62 @@ class VideoProcessor:
                 break
 
             timestamp = frame_idx / fps
-            raw_frame_copy = frame.copy() if generate_annotated_video else None
 
-            # 1. Detection
-            detections = self.detector.detect(frame)
+            # Frame skipping for acceleration
+            should_run_detection = (frame_idx % frame_skip == 0)
 
-            # 2. Tracking
-            active_tracks = tracker.update(detections, frame_idx, timestamp, fps)
+            if should_run_detection:
+                # 1. Detection
+                detections = self.detector.detect(frame)
 
-            # 3. Behaviour Reasoning & Risk
-            new_events = behaviour_engine.process_frame(active_tracks, frame_idx, timestamp)
+                # 2. Tracking
+                active_tracks = tracker.update(detections, frame_idx, timestamp, fps)
 
-            # 4. Handle new incidents
-            for event in new_events:
-                inc_id = f"inc_{uuid.uuid4().hex[:8]}"
-                inc_dict = {
-                    "id": inc_id,
-                    "video_id": video_id,
-                    "timestamp_sec": event.timestamp_sec,
-                    "frame_idx": event.frame_idx,
-                    "behaviour_type": event.behaviour_type.value,
-                    "object_track_id": event.object_track_id,
-                    "operator_track_id": event.operator_track_id,
-                    "confidence": event.confidence,
-                    "risk_level": event.risk_level.value,
-                    "risk_score": event.risk_score,
-                    "evidence_description": event.evidence_description,
-                    "root_cause": event.root_cause,
-                    "recommended_action": event.recommended_action,
-                    "bounding_box": event.bounding_box,
-                }
-                
-                # Generate evidence snapshot
-                evidence_img_path = create_evidence_snapshot(frame, inc_dict, self.evidence_dir)
-                inc_dict["evidence_image_path"] = evidence_img_path
-                
-                # Save to database
-                DatabaseManager.save_incident(inc_dict)
-                all_incidents.append(inc_dict)
+                # 3. Behaviour Reasoning & Risk
+                new_events = behaviour_engine.process_frame(active_tracks, frame_idx, timestamp)
 
-                # Set on-screen banner for video replay
-                recent_alert_banner = f"[{event.risk_level.value}] {event.behaviour_type.value.upper()}"
-                recent_alert_expiry = timestamp + 1.8
+                # 4. Handle new incidents
+                for event in new_events:
+                    inc_id = f"inc_{uuid.uuid4().hex[:8]}"
+                    inc_dict = {
+                        "id": inc_id,
+                        "video_id": video_id,
+                        "timestamp_sec": event.timestamp_sec,
+                        "frame_idx": event.frame_idx,
+                        "behaviour_type": event.behaviour_type.value,
+                        "object_track_id": event.object_track_id,
+                        "operator_track_id": event.operator_track_id,
+                        "confidence": event.confidence,
+                        "risk_level": event.risk_level.value,
+                        "risk_score": event.risk_score,
+                        "evidence_description": event.evidence_description,
+                        "root_cause": event.root_cause,
+                        "recommended_action": event.recommended_action,
+                        "bounding_box": event.bounding_box,
+                    }
+                    
+                    # Generate evidence snapshot
+                    evidence_img_path = create_evidence_snapshot(frame, inc_dict, self.evidence_dir)
+                    inc_dict["evidence_image_path"] = evidence_img_path
+                    
+                    # Save to database
+                    DatabaseManager.save_incident(inc_dict)
+                    all_incidents.append(inc_dict)
+
+                    recent_alert_banner = f"[{event.risk_level.value}] {event.behaviour_type.value.upper()}"
+                    recent_alert_expiry = timestamp + 1.8
+
+            # Update live task status
+            if frame_idx % 15 == 0 and frame_count > 0:
+                TASK_STATUS[video_id]["current_frame"] = frame_idx
+                TASK_STATUS[video_id]["progress_percent"] = min(99, int((frame_idx / frame_count) * 100))
+                TASK_STATUS[video_id]["incidents_count"] = len(all_incidents)
 
             # 5. Render annotated frame if video recording requested
             if generate_annotated_video and writer is not None:
-                vis_frame = draw_hud_overlay(frame, frame_idx, timestamp, fps, len(active_tracks), len(all_incidents))
-                vis_frame = draw_track_annotations(vis_frame, active_tracks)
+                vis_frame = draw_hud_overlay(frame, frame_idx, timestamp, fps, len(tracker.tracks), len(all_incidents))
+                vis_frame = draw_track_annotations(vis_frame, list(tracker.tracks.values()))
                 
-                # Draw live alert badge if recent
                 if recent_alert_banner and timestamp < recent_alert_expiry:
                     cv2.rectangle(vis_frame, (width - 340, 50), (width - 15, 95), (0, 0, 210), -1)
                     cv2.putText(vis_frame, recent_alert_banner, (width - 330, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -162,7 +184,7 @@ class VideoProcessor:
             annotated_path=annotated_path
         )
 
-        return {
+        result = {
             "video_id": video_id,
             "filename": filename,
             "duration": round(duration, 2),
@@ -171,3 +193,16 @@ class VideoProcessor:
             "incidents": all_incidents,
             "annotated_video": annotated_path
         }
+
+        TASK_STATUS[video_id] = {
+            "video_id": video_id,
+            "filename": filename,
+            "status": "completed",
+            "progress_percent": 100,
+            "current_frame": frame_idx,
+            "total_frames": frame_count,
+            "incidents_count": len(all_incidents),
+            "result": result
+        }
+
+        return result
