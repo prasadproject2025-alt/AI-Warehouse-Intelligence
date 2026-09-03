@@ -31,7 +31,7 @@ class StrapDetector:
             return events
 
         operators = [t for t in tracked_objects if t.entity_type == WarehouseEntity.OPERATOR]
-        products = [t for t in tracked_objects if t.entity_type == WarehouseEntity.CARTON]
+        products = [t for t in tracked_objects if t.entity_type in (WarehouseEntity.CARTON, WarehouseEntity.CUPBOARD, WarehouseEntity.MATTRESS)]
 
         for op in operators:
             for prod in products:
@@ -47,10 +47,10 @@ class StrapDetector:
                 dist_y = abs(op_hands_y - prod_top_y)
                 dist_x = abs(op.center[0] - prod.center[0])
 
-                # When pulling with strap: operator stands at arm's length (dist_x ~ 80-180px)
-                # and hands are aligned right at the top strap level, with carton moving
-                is_moving = abs(prod.vx) > 20.0 or abs(prod.vy) > 15.0
-                if dist_y < 50.0 and 60.0 < dist_x < 220.0 and is_moving:
+                # When pulling with strap: operator stands at arm's length (dist_x ~ 40-260px)
+                # and hands are aligned near the top strap level, with carton moving
+                is_moving = abs(prod.vx) > 15.0 or abs(prod.vy) > 12.0
+                if dist_y < 75.0 and 40.0 < dist_x < 260.0 and is_moving:
                     self.alerted_tracks.add(pair_key)
                     
                     params = {

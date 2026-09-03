@@ -33,12 +33,12 @@ class OrientationDetector:
             if trk.track_id in self.alerted_tracks:
                 continue
 
-            # Check if this object is a cupboard or tall carton stored horizontally
-            # If cupboard has width > height * 1.3, it is laid flat on its side or back
-            is_cupboard = trk.entity_type == WarehouseEntity.CUPBOARD
+            # Check if this object is a cupboard or tall carton/KD packet stored horizontally
+            # If item has width > height * 1.25, it is laid flat on its side or back
+            is_tall_item = trk.entity_type in (WarehouseEntity.CUPBOARD, WarehouseEntity.CARTON)
             is_horizontal_orientation = trk.width > (trk.height * 1.25)
 
-            if is_cupboard and is_horizontal_orientation:
+            if is_tall_item and is_horizontal_orientation:
                 self.alerted_tracks.add(trk.track_id)
                 
                 params = {
