@@ -55,6 +55,8 @@ def serve_root():
         return FileResponse("dashboard/dist/index.html")
     return {"message": "VisionGuard API is running. Build frontend with 'cd dashboard && npm run build'"}
 
+processor = VideoProcessor(conf_threshold=0.25)
+
 class AssistantQueryRequest(BaseModel):
     query: str
     video_id: Optional[str] = None

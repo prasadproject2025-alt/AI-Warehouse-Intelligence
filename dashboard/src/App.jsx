@@ -147,12 +147,16 @@ export default function App() {
         method: 'POST',
         body: formData
       });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Server status ${res.status}: ${errText.substring(0, 100)}`);
+      }
       const data = await res.json();
-      setUploadStatus(`Success! Identified ${data.result.incidents_count} incidents.`);
+      setUploadStatus(`Success! Identified ${data.result.incidents_count} incidents in ${file.name}.`);
       fetchVideos();
       fetchAnalytics();
     } catch (err) {
-      setUploadStatus(`Upload failed: ${err.message}`);
+      setUploadStatus(`Upload error: ${err.message}`);
     } finally {
       setIsUploading(false);
     }
