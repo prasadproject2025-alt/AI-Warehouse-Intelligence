@@ -1,0 +1,288 @@
+{
+  "data/samples\\Dock_level,_dragging_cupb.jpg": [
+    {
+      "class": "person",
+      "conf": 0.814,
+      "box": [
+        586.6,
+        94.1,
+        699.0,
+        385.1
+      ]
+    }
+  ],
+  "data/samples\\KD_packets_dragged,_heavy.jpg": [
+    {
+      "class": "person",
+      "conf": 0.876,
+      "box": [
+        356.4,
+        169.6,
+        599.6,
+        544.7
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.584,
+      "box": [
+        611.1,
+        22.4,
+        720.8,
+        196.9
+      ]
+    }
+  ],
+  "data/samples\\Rolling_and_dragging_on_w.jpg": [
+    {
+      "class": "person",
+      "conf": 0.839,
+      "box": [
+        779.7,
+        318.3,
+        920.5,
+        551.0
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.654,
+      "box": [
+        687.7,
+        633.5,
+        738.5,
+        720.0
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.539,
+      "box": [
+        713.9,
+        208.4,
+        769.2,
+        317.9
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.534,
+      "box": [
+        579.7,
+        300.3,
+        680.6,
+        536.4
+      ]
+    }
+  ],
+  "data/samples\\Rolling_and_dropping_cart.jpg": [
+    {
+      "class": "person",
+      "conf": 0.669,
+      "box": [
+        714.2,
+        105.9,
+        878.4,
+        478.9
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.516,
+      "box": [
+        890.1,
+        445.3,
+        1092.5,
+        591.8
+      ]
+    }
+  ],
+  "data/samples\\rolling_dropping_frame_0.jpg": [
+    {
+      "class": "tv",
+      "conf": 0.636,
+      "box": [
+        295.4,
+        7.1,
+        1209.0,
+        716.5
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.562,
+      "box": [
+        624.6,
+        266.6,
+        739.5,
+        526.5
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.525,
+      "box": [
+        643.2,
+        196.0,
+        743.7,
+        360.3
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.42,
+      "box": [
+        484.4,
+        271.1,
+        617.1,
+        567.5
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.398,
+      "box": [
+        628.1,
+        206.7,
+        742.0,
+        497.6
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.355,
+      "box": [
+        483.9,
+        265.9,
+        675.4,
+        566.0
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.294,
+      "box": [
+        486.1,
+        355.7,
+        616.2,
+        565.5
+      ]
+    }
+  ],
+  "data/samples\\rolling_dropping_frame_141.jpg": [
+    {
+      "class": "person",
+      "conf": 0.87,
+      "box": [
+        647.2,
+        218.7,
+        853.9,
+        621.9
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.724,
+      "box": [
+        719.9,
+        99.1,
+        874.3,
+        382.4
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.311,
+      "box": [
+        460.4,
+        155.9,
+        546.3,
+        330.2
+      ]
+    },
+    {
+      "class": "truck",
+      "conf": 0.282,
+      "box": [
+        598.3,
+        0.6,
+        1020.9,
+        332.6
+      ]
+    }
+  ],
+  "data/samples\\rolling_dropping_frame_211.jpg": [
+    {
+      "class": "person",
+      "conf": 0.692,
+      "box": [
+        738.1,
+        135.3,
+        926.4,
+        415.6
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.62,
+      "box": [
+        723.6,
+        277.5,
+        925.1,
+        663.1
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.336,
+      "box": [
+        782.5,
+        318.2,
+        926.9,
+        660.8
+      ]
+    }
+  ],
+  "data/samples\\rolling_dropping_frame_281.jpg": [
+    {
+      "class": "person",
+      "conf": 0.853,
+      "box": [
+        686.9,
+        234.2,
+        832.6,
+        607.2
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.83,
+      "box": [
+        621.0,
+        135.7,
+        722.1,
+        428.5
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.79,
+      "box": [
+        790.4,
+        259.1,
+        950.0,
+        567.6
+      ]
+    },
+    {
+      "class": "person",
+      "conf": 0.694,
+      "box": [
+        796.8,
+        179.2,
+        924.4,
+        358.2
+      ]
+    }
+  ]
+}

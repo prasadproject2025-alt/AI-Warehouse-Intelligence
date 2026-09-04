@@ -1,0 +1,72 @@
+[
+  {
+    "filename": "Dock level, dragging cupboard.mp4",
+    "resolution": "1280x720",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_count": 930,
+    "duration_sec": 31.0,
+    "sample_image": "data/samples/Dock_level,_dragging_cupb.jpg"
+  },
+  {
+    "filename": "KD packets dragged, heavy box kept on other packets.mp4",
+    "resolution": "1280x720",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_count": 1012,
+    "duration_sec": 33.73,
+    "sample_image": "data/samples/KD_packets_dragged,_heavy.jpg"
+  },
+  {
+    "filename": "Rolling and dragging on wet floor.mp4",
+    "resolution": "1280x720",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_count": 183,
+    "duration_sec": 6.1,
+    "sample_image": "data/samples/Rolling_and_dragging_on_w.jpg"
+  },
+  {
+    "filename": "Rolling and dropping carton.mp4",
+    "resolution": "1280x720",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_count": 282,
+    "duration_sec": 9.4,
+    "sample_image": "data/samples/Rolling_and_dropping_cart.jpg"
+  },
+  {
+    "filename": "Stepping on cartons, vertical product kept horizontally, heavy product kept on top.mp4",
+    "resolution": "1280x720",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_count": 1471,
+    "duration_sec": 49.03,
+    "sample_image": "data/samples/Stepping_on_cartons,_vert.jpg"
+  },
+  {
+    "filename": "Throwing Mattresses.mp4",
+    "resolution": "1280x720",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_count": 1249,
+    "duration_sec": 41.63,
+    "sample_image": "data/samples/Throwing_Mattresses.jpg"
+  },
+  {
+    "filename": "Throwing seating cartons, using strap to hold.mp4",
+    "resolution": "1280x720",
+    "width": 1280,
+    "height": 720,
+    "fps": 30.0,
+    "frame_count": 451,
+    "duration_sec": 15.03,
+    "sample_image": "data/samples/Throwing_seating_cartons,.jpg"
+  }
+]
