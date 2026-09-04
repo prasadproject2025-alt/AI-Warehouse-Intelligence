@@ -186,12 +186,21 @@ class VideoProcessor:
         t_start = time.time()
 
         while True:
+            analyse = frame_idx % stride == 0
+            if writer is None and not analyse:
+                # Nothing needs this frame's pixels: grab() advances the decoder
+                # without decoding, which is far cheaper than a full read().
+                if not cap.grab():
+                    break
+                frame_idx += 1
+                continue
+
             ret, frame = cap.read()
             if not ret:
                 break
             timestamp = frame_idx / fps
 
-            if frame_idx % stride == 0:
+            if analyse:
                 infer_frame = (
                     cv2.resize(frame, None, fx=infer_scale, fy=infer_scale)
                     if infer_scale < 1.0

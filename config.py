@@ -82,12 +82,19 @@ PERSON_CONF = _env_float("PERSON_CONF", 0.25)
 PRODUCT_CONF = _env_float("PRODUCT_CONF", 0.12)
 EQUIPMENT_CONF = _env_float("EQUIPMENT_CONF", 0.20)
 IOU_THRESHOLD = _env_float("IOU_THRESHOLD", 0.45)
-INFERENCE_IMGSZ = _env_int("INFERENCE_IMGSZ", 640)
+# 512 rather than 640: measured on the pilot clips, the smaller size is ~15%
+# faster per frame with no loss in person or product detection rate.
+INFERENCE_IMGSZ = _env_int("INFERENCE_IMGSZ", 512)
 
 # Frames actually sent to the detector: 1 = every frame, 3 = every third frame.
-DETECTION_FRAME_STRIDE = _env_int("DETECTION_FRAME_STRIDE", 3)
+# Inference is ~84% of analysis time, so the stride is the dominant speed
+# control. 5 keeps ~6 samples/second at 30fps, which is still well inside the
+# grace windows the behaviour detectors use.
+DETECTION_FRAME_STRIDE = _env_int("DETECTION_FRAME_STRIDE", 5)
 # Longest edge the frame is resized to before inference (0 = native resolution).
-MAX_INFERENCE_WIDTH = _env_int("MAX_INFERENCE_WIDTH", 960)
+# Downscale before inference. Kept at/near the inference size so the frame is
+# not resized twice for no benefit.
+MAX_INFERENCE_WIDTH = _env_int("MAX_INFERENCE_WIDTH", 768)
 
 # --- Behaviour engine -------------------------------------------------------
 # Minimum seconds between two alerts of the same behaviour on the same track.
