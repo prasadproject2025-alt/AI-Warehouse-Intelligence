@@ -191,7 +191,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 def serve_root():
     index = os.path.join(_DASHBOARD_DIST, "index.html")
     if os.path.exists(index):
-        return FileResponse(index)
+        # Never cache the entry point. Asset filenames are content-hashed and
+        # old ones are removed on rebuild, so a cached index.html points at a
+        # bundle that no longer exists and the whole app fails to boot.
+        return FileResponse(index, headers={"Cache-Control": "no-cache, must-revalidate"})
     return {
         "message": "VisionGuard API is running.",
         "hint": "Build the dashboard with: cd dashboard && npm install && npm run build",
@@ -580,6 +583,58 @@ def cancel_batch(batch_id: str):
     return {"status": "cancelling", "batch_id": batch_id}
 
 
+class ResetRequest(BaseModel):
+    """Clear stored analysis. Source videos in the library are never touched."""
+
+    delete_evidence: bool = True
+
+
+@app.post("/api/reset")
+def reset_analysis(req: ResetRequest):
+    """
+    Return the system to a clean slate.
+
+    Removes every analysed video row, incident, batch and generated artefact,
+    but never the source videos in the library, so the dataset can simply be
+    analysed again. Any live session is stopped first, otherwise it would keep
+    writing rows into the database that was just cleared.
+    """
+    for session in live_manager.list():
+        live_manager.stop(session["session_id"])
+
+    for state in list(batch_runner.BATCH_STATUS.values()):
+        batch_runner.cancel(state["batch_id"])
+    batch_runner.BATCH_STATUS.clear()
+
+    removed = DatabaseManager.clear_analysis()
+    TASK_STATUS.clear()
+
+    files_removed = 0
+    if req.delete_evidence:
+        for directory in (config.EVIDENCE_DIR, config.CLIPS_DIR, config.PROCESSED_VIDEOS_DIR):
+            if not os.path.isdir(directory):
+                continue
+            for name in os.listdir(directory):
+                path = os.path.join(directory, name)
+                # Confine deletion to the configured directory.
+                if os.path.commonpath([os.path.abspath(path), directory]) != directory:
+                    continue
+                if os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                        files_removed += 1
+                    except OSError:
+                        logger.warning("Could not remove %s", path)
+
+    logger.info("Reset: %d video row(s), %d artefact(s)", removed, files_removed)
+    return {
+        "status": "reset",
+        "videos_removed": removed,
+        "files_removed": files_removed,
+        "library_size": len(batch_runner.library_videos()),
+    }
+
+
 @app.get("/api/analytics")
 def get_analytics(batch_id: Optional[str] = None):
     """Shift analytics, optionally scoped to a single analysis run."""
@@ -824,5 +879,5 @@ def spa_fallback(full_path: str):
         raise HTTPException(status_code=404, detail="Not found")
     index = os.path.join(_DASHBOARD_DIST, "index.html")
     if os.path.exists(index):
-        return FileResponse(index)
+        return FileResponse(index, headers={"Cache-Control": "no-cache, must-revalidate"})
     raise HTTPException(status_code=404, detail="Not found")

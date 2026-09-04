@@ -269,3 +269,30 @@ def test_prevention_accepts_a_batch_scope():
     res = client.get("/api/prevention?batch_id=batch_absent")
     assert res.status_code == 200
     assert res.json()["baseline"]["total_footage_minutes"] == 0
+
+
+# ------------------------------------------------------------------- reset ---
+def test_reset_clears_analysis_but_keeps_source_videos():
+    seed_video(video_id="v_reset", batch_id="batch_r")
+    seed_incident(id="i_reset", video_id="v_reset", batch_id="batch_r")
+    assert client.get("/api/analytics").json()["total_incidents"] >= 1
+
+    res = client.post("/api/reset", json={"delete_evidence": False})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "reset"
+    assert body["videos_removed"] >= 1
+    # The library is the source of truth for what can be analysed; reset must
+    # never remove it, or the dataset could not be re-run.
+    assert body["library_size"] == len(client.get("/api/live/sources").json()["library"])
+
+    after = client.get("/api/analytics").json()
+    assert after["total_incidents"] == 0
+    assert after["total_videos_analyzed"] == 0
+
+
+def test_reset_also_clears_batch_history():
+    seed_video(video_id="v_r2", batch_id="batch_r2")
+    seed_incident(id="i_r2", video_id="v_r2", batch_id="batch_r2")
+    client.post("/api/reset", json={"delete_evidence": False})
+    assert client.get("/api/batches").json()["batches"] == []

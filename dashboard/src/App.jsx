@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle, BarChart3, Bot, CheckCircle2, ClipboardCheck, Crosshair, Eye,
   FileVideo, GraduationCap, Layers, Loader2, MapPin, RefreshCw, Search, Send,
-  Radio, ShieldAlert, Sparkles, Square, Upload, Video, XCircle,
+  Radio, RotateCcw, ShieldAlert, Sparkles, Square, Upload, Video, XCircle,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ helpers */
@@ -153,6 +153,8 @@ export default function App() {
   const [scope, setScope] = useState('');          // '' = all stored analysis
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState('');
+  // How many videos are in the library, so the button can say what it will run.
+  const [libraryCount, setLibraryCount] = useState(0);
 
   const refreshBatches = useCallback(async () => {
     try {
@@ -161,12 +163,42 @@ export default function App() {
       const d = await r.json();
       setBatches(d.batches || []);
       setActiveBatch(d.active || null);
+      setLibraryCount(d.library_size || 0);
       return d;
     } catch { /* transient */ }
   }, []);
 
   useEffect(() => { refreshBatches(); }, [refreshBatches]);
 
+
+  const resetAll = async () => {
+    // Clears stored analysis only. The videos in the library stay, so the
+    // dataset can be analysed again immediately.
+    if (!window.confirm(
+      "Reset will delete all analysis results, incidents and generated evidence.\n\n"
+      + "Your source videos are kept. Continue?"
+    )) return;
+    setBatchBusy(true); setBatchError("");
+    try {
+      const r = await fetch("/api/reset", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delete_evidence: true }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || "Reset failed");
+      setScope("");
+      setSelectedVideo(null);
+      setIncidents([]);
+      setSelectedIncident(null);
+      await refreshBatches();
+      await refreshVideos(false);
+      await refreshAnalytics();
+    } catch (e) {
+      setBatchError(e.message);
+    } finally {
+      setBatchBusy(false);
+    }
+  };
 
   const runBatch = async (videos = []) => {
     setBatchBusy(true); setBatchError('');
@@ -526,8 +558,8 @@ export default function App() {
                 </div>
                 <span className="dataset-status">
                   Analysing {activeBatch.completed}/{activeBatch.total}
-                  {activeBatch.current ? ` — ${activeBatch.current.slice(0, 34)}` : ""}
-                  {" · "}{activeBatch.incidents} events so far
+                  {activeBatch.current ? ` \u2014 ${activeBatch.current.slice(0, 30)}` : ""}
+                  {" \u00b7 "}{activeBatch.incidents} events so far
                 </span>
               </div>
               <button className="link-btn"
@@ -536,12 +568,17 @@ export default function App() {
               </button>
             </>
           ) : (
-            <button className={`primary-btn ${batchBusy ? "disabled" : ""}`}
-              onClick={() => runBatch()} disabled={batchBusy}>
-              {batchBusy
-                ? (<><Loader2 size={15} className="spin" /> Starting</>)
-                : (<><Layers size={15} /> Analyse all videos</>)}
-            </button>
+            <>
+              <button className="ghost-btn" onClick={resetAll} disabled={batchBusy}>
+                <RotateCcw size={14} /> Reset
+              </button>
+              <button className={`primary-btn ${batchBusy ? "disabled" : ""}`}
+                onClick={() => runBatch()} disabled={batchBusy}>
+                {batchBusy
+                  ? (<><Loader2 size={15} className="spin" /> Starting</>)
+                  : (<><Layers size={15} /> Analyse dataset ({libraryCount} videos)</>)}
+              </button>
+            </>
           )}
         </div>
       </section>
