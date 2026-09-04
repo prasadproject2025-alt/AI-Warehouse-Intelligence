@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -31,7 +32,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -39,6 +40,7 @@ import config
 from assistant.llm import AIAssistant
 from backend.database.db import DatabaseManager, init_db
 from behaviour.behaviour_engine import BehaviourEngine, SceneContext
+from video.live import SOURCE_KINDS as LIVE_SOURCE_KINDS, LiveSessionManager
 from video.processor import TASK_STATUS, VideoProcessor
 
 logging.basicConfig(
@@ -86,6 +88,10 @@ if os.path.isdir(os.path.join(_DASHBOARD_DIST, "assets")):
 # One processor (one loaded model) shared across requests. Analysis runs in the
 # background threadpool; loading the model per request would be far slower.
 processor = VideoProcessor()
+
+# Live sessions share the loaded model with the recorded pipeline; inference is
+# serialised inside the session so the two cannot run concurrently on one model.
+live_manager = LiveSessionManager(processor.detector, config.EVIDENCE_DIR)
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -256,6 +262,10 @@ def get_video_details(video_id: str):
 @app.delete("/api/videos/{video_id}")
 def delete_video(video_id: str):
     _validate_id(video_id, "video id")
+    if video_id.startswith("live_"):
+        # A running session would otherwise keep writing incidents against
+        # a row that no longer exists.
+        live_manager.stop(video_id[len("live_"):])
     removed = DatabaseManager.delete_video(video_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -566,6 +576,170 @@ def chat_with_assistant(req: AssistantQueryRequest):
     if req.video_id:
         _validate_id(req.video_id, "video id")
     return AIAssistant.answer_query(query=req.query, video_id=req.video_id)
+
+
+# ----------------------------------------------------------------- live feed
+class LiveStartRequest(BaseModel):
+    """
+    Start near-real-time analysis of a continuous source.
+
+    ``source_kind``:
+      * ``camera`` - a locally attached camera; ``source`` is its index ("0").
+      * ``stream`` - an RTSP/HTTP CCTV feed; ``source`` is the URL.
+      * ``file``   - a video under the configured raw directory, replayed at its
+        natural rate. This exercises the real live path when no camera is
+        present; it is labelled as a replay everywhere it is surfaced.
+    """
+
+    source_kind: str = Field(default="file")
+    source: str = Field(default="", max_length=500)
+    camera_id: str = Field(default="CAM-LIVE", max_length=60)
+    bay: str = Field(default="Unassigned Bay", max_length=80)
+    shift: str = Field(default="Unassigned Shift", max_length=60)
+    floor_condition: str = Field(default="unknown")
+    dock_transfer: bool = False
+    loop_file: bool = True
+
+    @field_validator("source_kind")
+    @classmethod
+    def known_kind(cls, v: str) -> str:
+        kind = v.strip().lower()
+        if kind not in LIVE_SOURCE_KINDS:
+            raise ValueError(f"source_kind must be one of {list(LIVE_SOURCE_KINDS)}")
+        return kind
+
+    @field_validator("floor_condition")
+    @classmethod
+    def known_floor(cls, v: str) -> str:
+        cond = (v or "unknown").strip().lower()
+        if cond not in {"dry", "wet", "unknown"}:
+            raise ValueError("floor_condition must be dry, wet or unknown")
+        return cond
+
+
+def _resolve_live_source(req: LiveStartRequest):
+    """
+    Turn a request into a capture source, refusing anything unsafe.
+
+    A file source is confined to the configured raw directory so a request
+    cannot make the server open an arbitrary path, and a stream must be a
+    recognised video-transport URL.
+    """
+    if req.source_kind == "camera":
+        raw = (req.source or "0").strip()
+        if not raw.isdigit() or int(raw) > 8:
+            raise HTTPException(status_code=400, detail="camera source must be an index 0-8")
+        return int(raw)
+
+    if req.source_kind == "stream":
+        url = (req.source or "").strip()
+        if not url.lower().startswith(("rtsp://", "rtmp://", "http://", "https://")):
+            raise HTTPException(
+                status_code=400,
+                detail="stream source must be an rtsp://, rtmp://, http:// or https:// URL",
+            )
+        return url
+
+    name = _safe_filename(req.source or "")
+    if not name:
+        raise HTTPException(status_code=400, detail="file source is required")
+    candidates = [
+        p for p in os.listdir(config.RAW_VIDEOS_DIR)
+        if _safe_filename(p) == name or p == req.source
+    ]
+    if not candidates:
+        raise HTTPException(status_code=404, detail=f"No such video in the library: {req.source}")
+    path = os.path.join(config.RAW_VIDEOS_DIR, candidates[0])
+    if os.path.commonpath([os.path.abspath(path), config.RAW_VIDEOS_DIR]) != config.RAW_VIDEOS_DIR:
+        raise HTTPException(status_code=400, detail="Invalid file source")
+    return path
+
+
+@app.get("/api/live/sources")
+def live_sources():
+    """What this deployment can currently be pointed at."""
+    library = sorted(
+        f for f in os.listdir(config.RAW_VIDEOS_DIR)
+        if os.path.splitext(f)[1].lower() in config.ALLOWED_VIDEO_EXTENSIONS
+    )
+    return {
+        "source_kinds": list(LIVE_SOURCE_KINDS),
+        "library": library,
+        "active": live_manager.list(),
+        "note": (
+            "'file' replays a stored video at its natural rate through the live "
+            "pipeline. It is a stand-in for a camera, not a separate code path - "
+            "the analysis is identical."
+        ),
+    }
+
+
+@app.post("/api/live/start", status_code=202)
+def live_start(req: LiveStartRequest):
+    source = _resolve_live_source(req)
+    scene = SceneContext(
+        bay=req.bay.strip() or "Unassigned Bay",
+        shift=req.shift.strip() or "Unassigned Shift",
+        camera_id=req.camera_id.strip() or "CAM-LIVE",
+        floor_condition=req.floor_condition,
+        dock_transfer=req.dock_transfer,
+    )
+    try:
+        session = live_manager.start(source, req.source_kind, scene, loop_file=req.loop_file)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Surface an immediate failure (bad camera index, unreachable stream)
+    # rather than returning a session that is already dead.
+    for _ in range(20):
+        if session.status in ("running", "error"):
+            break
+        time.sleep(0.1)
+    if session.status == "error":
+        raise HTTPException(status_code=502, detail=session.error or "Could not open source")
+
+    logger.info("Live session %s started (%s)", session.session_id, req.source_kind)
+    return session.snapshot()
+
+
+@app.get("/api/live")
+def live_list():
+    return {"sessions": live_manager.list()}
+
+
+@app.get("/api/live/{session_id}")
+def live_status(session_id: str):
+    _validate_id(session_id, "session id")
+    session = live_manager.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="No such live session")
+    return session.snapshot()
+
+
+@app.get("/api/live/{session_id}/stream")
+def live_stream(session_id: str):
+    """Annotated frames as multipart JPEG, renderable in a plain <img>."""
+    _validate_id(session_id, "session id")
+    session = live_manager.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="No such live session")
+    return StreamingResponse(
+        session.mjpeg_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@app.post("/api/live/{session_id}/stop")
+def live_stop(session_id: str):
+    _validate_id(session_id, "session id")
+    session = live_manager.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="No such live session")
+    session.stop()
+    return session.snapshot()
 
 
 # Serve the SPA for unknown non-API paths so client-side routing works.

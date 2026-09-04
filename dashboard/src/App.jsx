@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle, BarChart3, Bot, CheckCircle2, ClipboardCheck, Crosshair, Eye,
   FileVideo, GraduationCap, Layers, Loader2, MapPin, RefreshCw, Search, Send,
-  ShieldAlert, Sparkles, Upload, Video, XCircle,
+  Radio, ShieldAlert, Sparkles, Square, Upload, Video, XCircle,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ helpers */
@@ -132,6 +132,8 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
+
+
   const [uploadError, setUploadError] = useState('');
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [sceneForm, setSceneForm] = useState({
@@ -182,6 +184,65 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
     finally { setVideosLoading(false); }
   }, [selectVideo, selectedVideo]);
+
+  // ---- live monitor -------------------------------------------------------
+  const [liveSources, setLiveSources] = useState(null);
+  const [liveSession, setLiveSession] = useState(null);
+  const [liveError, setLiveError] = useState('');
+  const [liveStarting, setLiveStarting] = useState(false);
+  const [liveForm, setLiveForm] = useState({
+    source_kind: 'file', source: '', camera_id: 'CAM-LIVE-01',
+    bay: 'Dock 09 - Inside', shift: 'Shift A',
+    floor_condition: 'unknown', dock_transfer: false,
+  });
+
+  useEffect(() => {
+    if (activeTab !== 'live' || liveSources) return;
+    fetch('/api/live/sources').then(r => r.json()).then(d => {
+      setLiveSources(d);
+      setLiveForm(f => ({ ...f, source: f.source || (d.library && d.library[0]) || '' }));
+      const running = (d.active || []).find(x => x.status === 'running');
+      if (running) setLiveSession(running);
+    }).catch(() => setLiveError('Could not reach the server.'));
+  }, [activeTab, liveSources]);
+
+  // Poll the running session for telemetry and new alerts.
+  useEffect(() => {
+    if (!liveSession || !['running', 'starting'].includes(liveSession.status)) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/live/${liveSession.session_id}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        setLiveSession(d);
+        if (d.event_count > 0) { refreshAnalytics(); }
+      } catch { /* transient; the next tick retries */ }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [liveSession, refreshAnalytics]);
+
+  const startLive = async () => {
+    setLiveStarting(true); setLiveError('');
+    try {
+      const r = await fetch('/api/live/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(liveForm),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Could not start the live session');
+      setLiveSession(d);
+    } catch (e) { setLiveError(e.message); }
+    finally { setLiveStarting(false); }
+  };
+
+  const stopLive = async () => {
+    if (!liveSession) return;
+    try {
+      const r = await fetch(`/api/live/${liveSession.session_id}/stop`, { method: 'POST' });
+      setLiveSession(await r.json());
+    } catch { setLiveError('Could not stop the session.'); }
+    refreshVideos(); refreshAnalytics();
+  };
 
   useEffect(() => {
     (async () => {
@@ -315,6 +376,9 @@ export default function App() {
 
   /* ----------------------------------------------------------------- views */
 
+  const live = liveSession;
+  const liveRunning = !!live && ['running', 'starting'].includes(live.status);
+
   return (
     <div className="app-container">
       <header className="navbar">
@@ -354,6 +418,7 @@ export default function App() {
       <nav className="tab-row">
         {[
           ['operations', Video, 'Operations & Replay'],
+          ['live', Radio, 'Live Monitor'],
           ['analytics', BarChart3, 'Shift Analytics'],
           ['prevention', GraduationCap, 'Prevention & Learning'],
           ['coverage', ClipboardCheck, 'Detection Coverage'],
@@ -593,6 +658,187 @@ export default function App() {
               </button>
             </div>
           </div>
+        </main>
+      )}
+
+      {activeTab === 'live' && (
+        <main className="dashboard-content">
+          <div className="video-section">
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">
+                  <Radio size={17} />
+                  <span>Live monitor{live && live.camera_id ? " \u2014 " + live.camera_id : ""}</span>
+                </div>
+                {live && (
+                  <span className={`risk-tag ${liveRunning ? "LOW" : "MEDIUM"}`}>
+                    {liveRunning ? "ANALYSING" : String(live.status || "").toUpperCase()}
+                  </span>
+                )}
+              </div>
+
+              <div className="video-container">
+                {liveRunning ? (
+                  <img className="main-video" alt="Live annotated feed"
+                       src={`/api/live/${live.session_id}/stream`} />
+                ) : (
+                  <div className="video-placeholder">
+                    <Radio size={30} style={{ margin: "0 auto 10px" }} />
+                    <div>No live session running.</div>
+                    <div style={{ fontSize: "0.78rem", marginTop: 6 }}>
+                      Choose a source below and start analysis.
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {live && (
+                <div className="video-meta">
+                  <span><span className="key">Analysed</span> <strong>{live.frames_analysed}</strong> frames</span>
+                  <span><span className="key">Rate</span> <strong>{live.analysed_fps}</strong> fps</span>
+                  <span><span className="key">Skipped to stay live</span> <strong>{live.frames_dropped}</strong></span>
+                  <span><span className="key">Tracks</span> <strong>{live.active_tracks}</strong></span>
+                  <span><span className="key">Alerts</span> <strong>{live.event_count}</strong></span>
+                  <span><span className="key">Uptime</span> <strong>{live.uptime_sec}s</strong></span>
+                </div>
+              )}
+            </div>
+
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title"><Crosshair size={17} /><span>Source and scene context</span></div>
+              </div>
+              <div className="pad">
+                <div className="form-grid">
+                  <label>Source type
+                    <select value={liveForm.source_kind} disabled={liveRunning}
+                      onChange={e => setLiveForm({ ...liveForm, source_kind: e.target.value, source: "" })}>
+                      <option value="file">Stored video (replayed live)</option>
+                      <option value="camera">Attached camera</option>
+                      <option value="stream">CCTV stream (RTSP/HTTP)</option>
+                    </select>
+                  </label>
+
+                  {liveForm.source_kind === "file" && (
+                    <label>Video
+                      <select value={liveForm.source} disabled={liveRunning}
+                        onChange={e => setLiveForm({ ...liveForm, source: e.target.value })}>
+                        {(liveSources && liveSources.library ? liveSources.library : []).map(f => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {liveForm.source_kind === "camera" && (
+                    <label>Camera index
+                      <input type="number" min="0" max="8" value={liveForm.source || "0"} disabled={liveRunning}
+                        onChange={e => setLiveForm({ ...liveForm, source: e.target.value })} />
+                    </label>
+                  )}
+                  {liveForm.source_kind === "stream" && (
+                    <label>Stream URL
+                      <input type="text" placeholder="rtsp://camera/stream" value={liveForm.source}
+                        disabled={liveRunning}
+                        onChange={e => setLiveForm({ ...liveForm, source: e.target.value })} />
+                    </label>
+                  )}
+
+                  <label>Camera ID
+                    <input value={liveForm.camera_id} disabled={liveRunning}
+                      onChange={e => setLiveForm({ ...liveForm, camera_id: e.target.value })} />
+                  </label>
+                  <label>Loading bay
+                    <input value={liveForm.bay} disabled={liveRunning}
+                      onChange={e => setLiveForm({ ...liveForm, bay: e.target.value })} />
+                  </label>
+                  <label>Shift
+                    <input value={liveForm.shift} disabled={liveRunning}
+                      onChange={e => setLiveForm({ ...liveForm, shift: e.target.value })} />
+                  </label>
+                  <label>Floor condition
+                    <select value={liveForm.floor_condition} disabled={liveRunning}
+                      onChange={e => setLiveForm({ ...liveForm, floor_condition: e.target.value })}>
+                      <option value="unknown">Unknown</option>
+                      <option value="dry">Dry</option>
+                      <option value="wet">Wet</option>
+                    </select>
+                  </label>
+                  <label className="checkbox-label">
+                    <input type="checkbox" checked={liveForm.dock_transfer} disabled={liveRunning}
+                      onChange={e => setLiveForm({ ...liveForm, dock_transfer: e.target.checked })} />
+                    Covers a dock transfer point
+                  </label>
+                </div>
+
+                <div style={{ display: "flex", gap: 10, marginTop: 18, alignItems: "center" }}>
+                  {!liveRunning ? (
+                    <button className={`primary-btn ${liveStarting ? "disabled" : ""}`}
+                      onClick={startLive} disabled={liveStarting}>
+                      {liveStarting
+                        ? (<><Loader2 size={16} className="spin" /> Starting analysis</>)
+                        : (<>Start live analysis</>)}
+                    </button>
+                  ) : (
+                    <button className="primary-btn" onClick={stopLive}>
+                      <Square size={14} /> Stop analysis
+                    </button>
+                  )}
+                </div>
+
+                {liveError && <div className="status-box error" style={{ marginTop: 14 }}>{liveError}</div>}
+
+                <p className="section-note" style={{ marginTop: 16, marginBottom: 0 }}>
+                  Live analysis runs the same detection, tracking, behaviour and risk code as recorded
+                  analysis, and its alerts are written to the same incident database. On CPU the
+                  pipeline analyses only a few frames per second, so frames are deliberately skipped
+                  to keep alerts anchored to the present rather than falling further behind. The
+                  skipped count shown above is the real figure, not an estimate.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <aside className="inspector-panel">
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title"><ShieldAlert size={17} /><span>Live alerts</span></div>
+              </div>
+              {live && live.events && live.events.length > 0 ? (
+                <div className="timeline-list">
+                  {live.events.map(ev => (
+                    <div key={ev.id} className="incident-card">
+                      <div className="incident-left">
+                        <span className={`risk-tag ${ev.risk_level}`}>{ev.risk_level}</span>
+                        <div className="incident-info">
+                          <span className="incident-name">
+                            {String(ev.behaviour_type).replace(/_/g, " ").toUpperCase()}
+                          </span>
+                          <span className="incident-time">
+                            {Number(ev.timestamp_sec).toFixed(1)}s into session
+                            {ev.bay ? " \u00b7 " + ev.bay : ""}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="incident-right">
+                        <span className="score">{ev.risk_score}</span>
+                        <div className="score-label">score</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <ShieldAlert size={26} />
+                  <div className="empty-title">No alerts yet</div>
+                  <div className="empty-hint">
+                    {liveRunning
+                      ? "Analysis is running. Risky handling appears here the moment it is detected."
+                      : "Alerts raised during a live session appear here, and are saved to the incident database alongside recorded findings."}
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
         </main>
       )}
 

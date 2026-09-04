@@ -57,7 +57,9 @@ def wait_for_server(timeout_sec: int = 120) -> bool:
     return False
 
 
-def request(path, method="GET", data=None, headers=None, raw=False):
+def request(path, method="GET", data=None, headers=None, raw=False, max_bytes=None):
+    # max_bytes is required for the MJPEG endpoint: it is an endless multipart
+    # stream, so an unbounded read() would never return.
     # The API returns percent-encoded static URLs, so only encode a path that
     # still carries raw spaces (which urllib would otherwise reject outright).
     if " " in path:
@@ -67,7 +69,7 @@ def request(path, method="GET", data=None, headers=None, raw=False):
         req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=60) as res:
-            body = res.read()
+            body = res.read(max_bytes) if max_bytes else res.read()
             return res.status, (body if raw else json.loads(body))
     except urllib.error.HTTPError as exc:
         body = exc.read()
@@ -252,6 +254,74 @@ def main() -> int:
 
     status, _ = request("/api/videos/vid_nope/status")
     check("status of unknown video handled", status == 200)
+
+    # ------------------------------------------------------- live monitoring
+    print("\n[12] Live stream analysis")
+    status, src = request("/api/live/sources")
+    check("live sources listed", status == 200 and "file" in src["source_kinds"],
+          ", ".join(src["source_kinds"]) if status == 200 else f"status {status}")
+
+    # Validation paths first: these must not open anything.
+    status, _ = request("/api/live/start", "POST",
+                        json.dumps({"source_kind": "telepathy"}).encode(),
+                        {"Content-Type": "application/json"})
+    check("unknown source kind -> 422", status == 422, f"status {status}")
+    status, _ = request("/api/live/start", "POST",
+                        json.dumps({"source_kind": "camera", "source": "99"}).encode(),
+                        {"Content-Type": "application/json"})
+    check("out-of-range camera index -> 400", status == 400, f"status {status}")
+    status, _ = request("/api/live/start", "POST",
+                        json.dumps({"source_kind": "stream", "source": "file:///etc/passwd"}).encode(),
+                        {"Content-Type": "application/json"})
+    check("non-video stream URL rejected -> 400", status == 400, f"status {status}")
+    status, _ = request("/api/live/start", "POST",
+                        json.dumps({"source_kind": "file", "source": "../../../etc/passwd"}).encode(),
+                        {"Content-Type": "application/json"})
+    check("path traversal in file source rejected", status in (400, 404), f"status {status}")
+    status, _ = request("/api/live/nope-not-a-session")
+    check("unknown live session -> 404", status == 404, f"status {status}")
+
+    # Now a real session against a stored clip replayed at its natural rate.
+    if src.get("library"):
+        clip = next((f for f in src["library"] if "Dock level" in f), src["library"][0])
+        payload = json.dumps({
+            "source_kind": "file", "source": clip, "camera_id": "CAM-VERIFY",
+            "bay": "Verification Bay", "shift": "Verification Shift",
+            "dock_transfer": True,
+        }).encode()
+        status, sess = request("/api/live/start", "POST", payload,
+                               {"Content-Type": "application/json"})
+        started = check("live session starts", status == 202 and sess.get("status") == "running",
+                        f"status {status}")
+        if started:
+            sid = sess["session_id"]
+            time.sleep(25)
+            status, st = request(f"/api/live/{sid}")
+            check("session reports telemetry", status == 200 and st["frames_analysed"] > 0,
+                  f"{st.get('frames_analysed')} frames at {st.get('analysed_fps')} fps")
+            check("frames are skipped to stay live", st["frames_dropped"] > 0,
+                  f"{st.get('frames_dropped')} skipped")
+            check("tracker is running on the stream", st["active_tracks"] >= 0)
+
+            body = request(f"/api/live/{sid}/stream", raw=True, max_bytes=80000)[1]
+            check("MJPEG stream serves JPEG frames",
+                  body is not None and bytes([0xFF, 0xD8]) in body[:80000],
+                  f"{len(body) if body else 0} bytes")
+
+            status, stopped = request(f"/api/live/{sid}/stop", "POST", b"",
+                                      {"Content-Type": "application/json"})
+            check("live session stops", status == 200 and stopped["status"] == "stopped")
+
+            # Live findings must be ordinary incidents, not a parallel store.
+            if stopped["event_count"] > 0:
+                status, inc = request(f"/api/incidents?video_id={stopped['video_id']}")
+                check("live alerts persisted as incidents",
+                      status == 200 and inc["count"] == stopped["event_count"],
+                      f"{inc.get('count')} rows for {stopped['event_count']} alerts")
+            else:
+                print("  [INFO] no alerts in the sampled window; persistence not exercised")
+
+            request(f"/api/videos/{stopped['video_id']}", "DELETE")  # leave no residue
 
     # ------------------------------------------------------------- dashboard
     print("\n[11] Dashboard is served")
