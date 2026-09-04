@@ -27,3 +27,9 @@ ALTER TABLE incidents ADD COLUMN duration_sec REAL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_incidents_behaviour ON incidents(behaviour_type);
 CREATE INDEX IF NOT EXISTS idx_incidents_bay ON incidents(bay);
 CREATE INDEX IF NOT EXISTS idx_incidents_created ON incidents(created_at);
+
+-- Batch analysis runs: lets the dashboard scope every page to one dataset.
+ALTER TABLE videos ADD COLUMN batch_id TEXT;
+ALTER TABLE incidents ADD COLUMN batch_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_videos_batch ON videos(batch_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_batch ON incidents(batch_id);

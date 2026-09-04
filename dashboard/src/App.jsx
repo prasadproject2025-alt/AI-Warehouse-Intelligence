@@ -145,14 +145,58 @@ export default function App() {
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
+  // ---- dataset batch analysis --------------------------------------------
+  // A batch is one analysis run over the library. Scoping every page to a
+  // batch keeps figures from an earlier experiment out of the current view.
+  const [batches, setBatches] = useState([]);
+  const [activeBatch, setActiveBatch] = useState(null);
+  const [scope, setScope] = useState('');          // '' = all stored analysis
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchError, setBatchError] = useState('');
+
+  const refreshBatches = useCallback(async () => {
+    try {
+      const r = await fetch('/api/batches');
+      if (!r.ok) return;
+      const d = await r.json();
+      setBatches(d.batches || []);
+      setActiveBatch(d.active || null);
+      return d;
+    } catch { /* transient */ }
+  }, []);
+
+  useEffect(() => { refreshBatches(); }, [refreshBatches]);
+
+
+  const runBatch = async (videos = []) => {
+    setBatchBusy(true); setBatchError('');
+    try {
+      const r = await fetch('/api/batches/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videos, replace_existing: true }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Could not start the analysis run');
+      setActiveBatch(d);
+    } catch (e) {
+      setBatchError(e.message);
+      setBatchBusy(false);
+    }
+  };
+
   /* ------------------------------------------------------------- data load */
 
   const refreshAnalytics = useCallback(async () => {
+    // Every aggregate follows the selected dataset scope, so the pages show
+    // the run the user chose rather than everything ever stored.
+    const q = scope ? `?batch_id=${encodeURIComponent(scope)}` : '';
     try {
-      const [a, p] = await Promise.all([apiGet('/api/analytics'), apiGet('/api/prevention')]);
+      const [a, p] = await Promise.all([
+        apiGet(`/api/analytics${q}`), apiGet(`/api/prevention${q}`),
+      ]);
       setAnalytics(a); setPrevention(p); setApiError(null);
     } catch (err) { setApiError(err.message); }
-  }, []);
+  }, [scope]);
 
   const selectVideo = useCallback(async (video) => {
     setSelectedVideo(video);
@@ -184,6 +228,28 @@ export default function App() {
     } catch (err) { setApiError(err.message); }
     finally { setVideosLoading(false); }
   }, [selectVideo, selectedVideo]);
+
+  // While a run is in flight, poll it and refresh the pages as results land.
+  useEffect(() => {
+    if (!activeBatch) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/batches/${activeBatch.batch_id}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        setActiveBatch(['queued', 'running'].includes(d.status) ? d : null);
+        if (!['queued', 'running'].includes(d.status)) {
+          setBatchBusy(false);
+          await refreshBatches();
+          setScope(d.batch_id);       // show exactly what was just analysed
+          await refreshVideos(false);
+          await refreshAnalytics();
+        }
+      } catch { /* transient */ }
+    }, 2500);
+    return () => clearInterval(id);
+  }, [activeBatch, refreshBatches, refreshVideos, refreshAnalytics]);
+
 
   // ---- live monitor -------------------------------------------------------
   const [liveSources, setLiveSources] = useState(null);
@@ -431,6 +497,58 @@ export default function App() {
           </button>
         ))}
       </nav>
+
+      <section className="dataset-bar">
+        <div className="dataset-left">
+          <span className="dataset-label">Dataset</span>
+          <select className="select" value={scope} disabled={!!activeBatch}
+            onChange={e => setScope(e.target.value)}>
+            <option value="">All stored analysis</option>
+            {batches.map(b => (
+              <option key={b.batch_id} value={b.batch_id}>
+                Run {b.batch_id.replace("batch_", "")} — {b.videos} videos, {b.incidents} events
+              </option>
+            ))}
+          </select>
+          {scope && (
+            <button className="link-btn" onClick={() => setScope("")}>show all</button>
+          )}
+        </div>
+
+        <div className="dataset-right">
+          {activeBatch ? (
+            <>
+              <div className="dataset-progress">
+                <div className="progress-track">
+                  <div className="progress-fill" style={{
+                    width: `${Math.round((activeBatch.completed / Math.max(1, activeBatch.total)) * 100)}%`,
+                  }} />
+                </div>
+                <span className="dataset-status">
+                  Analysing {activeBatch.completed}/{activeBatch.total}
+                  {activeBatch.current ? ` — ${activeBatch.current.slice(0, 34)}` : ""}
+                  {" · "}{activeBatch.incidents} events so far
+                </span>
+              </div>
+              <button className="link-btn"
+                onClick={() => fetch(`/api/batches/${activeBatch.batch_id}/cancel`, { method: "POST" })}>
+                cancel
+              </button>
+            </>
+          ) : (
+            <button className={`primary-btn ${batchBusy ? "disabled" : ""}`}
+              onClick={() => runBatch()} disabled={batchBusy}>
+              {batchBusy
+                ? (<><Loader2 size={15} className="spin" /> Starting</>)
+                : (<><Layers size={15} /> Analyse all videos</>)}
+            </button>
+          )}
+        </div>
+      </section>
+
+      {batchError && (
+        <div className="alert-bar"><AlertTriangle size={15} /> {batchError}</div>
+      )}
 
       <section className="kpi-row">
         <KpiCard label="Critical risk events" value={analytics?.risk_breakdown?.CRITICAL ?? '—'}

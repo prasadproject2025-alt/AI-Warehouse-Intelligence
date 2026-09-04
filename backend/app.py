@@ -40,6 +40,7 @@ import config
 from assistant.llm import AIAssistant
 from backend.database.db import DatabaseManager, init_db
 from behaviour.behaviour_engine import BehaviourEngine, SceneContext
+from video import batch as batch_runner
 from video.live import SOURCE_KINDS as LIVE_SOURCE_KINDS, LiveSessionManager
 from video.processor import TASK_STATUS, VideoProcessor
 
@@ -457,6 +458,7 @@ def list_incidents(
     behaviour_type: Optional[str] = None,
     bay: Optional[str] = None,
     shift: Optional[str] = None,
+    batch_id: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
@@ -479,6 +481,7 @@ def list_incidents(
             behaviour_type=behaviour_type,
             bay=bay,
             shift=shift,
+            batch_id=batch_id,
             search=search,
             limit=limit,
             offset=offset,
@@ -510,19 +513,91 @@ def review_incident(incident_id: str, req: ReviewRequest):
     return _decorate_incident(DatabaseManager.get_incident_by_id(incident_id))
 
 
+@app.get("/api/batches")
+def list_batches():
+    """Analysis runs available to scope the dashboard to."""
+    return {
+        "batches": DatabaseManager.list_batches(),
+        "active": batch_runner.active_batch(),
+        "library_size": len(batch_runner.library_videos()),
+    }
+
+
+class BatchRunRequest(BaseModel):
+    """
+    Analyse a dataset in one tracked run.
+
+    ``videos`` empty means the whole library. ``replace_existing`` clears prior
+    non-live analysis so a run is reproducible instead of accumulating
+    duplicates of the same footage.
+    """
+
+    videos: List[str] = Field(default_factory=list)
+    replace_existing: bool = True
+
+
+@app.post("/api/batches/run", status_code=202)
+def run_batch(req: BatchRunRequest):
+    library = batch_runner.library_videos()
+    if not library:
+        raise HTTPException(status_code=400, detail="No videos in the library to analyse")
+
+    if req.videos:
+        unknown = [v for v in req.videos if v not in library]
+        if unknown:
+            raise HTTPException(
+                status_code=404, detail=f"Not in the library: {', '.join(unknown[:5])}"
+            )
+        selected = req.videos
+    else:
+        selected = library
+
+    try:
+        batch_id = batch_runner.start_batch(
+            processor, selected, replace_existing=req.replace_existing
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    logger.info("Batch %s queued for %d video(s)", batch_id, len(selected))
+    return batch_runner.get_status(batch_id)
+
+
+@app.get("/api/batches/{batch_id}")
+def batch_status(batch_id: str):
+    _validate_id(batch_id, "batch id")
+    state = batch_runner.get_status(batch_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="No such batch")
+    return state
+
+
+@app.post("/api/batches/{batch_id}/cancel")
+def cancel_batch(batch_id: str):
+    _validate_id(batch_id, "batch id")
+    if not batch_runner.cancel(batch_id):
+        raise HTTPException(status_code=404, detail="No running batch with that id")
+    return {"status": "cancelling", "batch_id": batch_id}
+
+
 @app.get("/api/analytics")
-def get_analytics():
-    return DatabaseManager.get_analytics_summary()
+def get_analytics(batch_id: Optional[str] = None):
+    """Shift analytics, optionally scoped to a single analysis run."""
+    if batch_id:
+        _validate_id(batch_id, "batch id")
+    return DatabaseManager.get_analytics_summary(batch_id=batch_id)
 
 
 @app.get("/api/prevention")
-def prevention_insights():
+def prevention_insights(batch_id: Optional[str] = None):
     """
     Prevention & learning view: recurring behaviours, the bays and shifts that
     need attention, and the training topics those imply. Derived entirely from
     recorded incidents.
     """
-    summary = DatabaseManager.get_analytics_summary()
+    if batch_id:
+        _validate_id(batch_id, "batch id")
+    summary = DatabaseManager.get_analytics_summary(batch_id=batch_id)
     behaviours = summary["top_behaviours"]
     total = max(1, summary["total_incidents"])
 

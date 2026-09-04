@@ -212,3 +212,60 @@ def test_assistant_returns_grounding_metadata():
     assert body["grounded"] is True
     assert body["intent"]
     assert body["total_incidents_in_db"] == 1
+
+
+# ------------------------------------------------- dataset batch analysis ---
+def test_batches_endpoint_reports_library_and_runs():
+    res = client.get("/api/batches")
+    assert res.status_code == 200
+    body = res.json()
+    assert "batches" in body and "library_size" in body
+    assert body["active"] is None
+
+
+def test_batch_run_rejects_unknown_video():
+    res = client.post("/api/batches/run", json={"videos": ["not-a-real-file.mp4"]})
+    assert res.status_code == 404
+    assert "library" in res.json()["detail"].lower()
+
+
+def test_batch_status_unknown_id_is_404():
+    assert client.get("/api/batches/batch_missing").status_code == 404
+
+
+def test_cancel_unknown_batch_is_404():
+    assert client.post("/api/batches/batch_missing/cancel").status_code == 404
+
+
+def test_analytics_accepts_a_batch_scope():
+    """A scope that matches nothing must report zero, not fall back to totals."""
+    seed_video(video_id="v_scoped", batch_id="batch_known")
+    seed_incident(id="i_scoped", video_id="v_scoped", batch_id="batch_known")
+
+    scoped = client.get("/api/analytics?batch_id=batch_known").json()
+    assert scoped["total_incidents"] == 1
+    assert scoped["total_videos_analyzed"] == 1
+
+    empty = client.get("/api/analytics?batch_id=batch_absent").json()
+    assert empty["total_incidents"] == 0
+    assert empty["total_videos_analyzed"] == 0
+    assert empty["by_bay"] == []
+
+
+def test_incidents_can_be_scoped_to_a_batch():
+    seed_video(video_id="v_a", batch_id="batch_a")
+    seed_video(video_id="v_b", batch_id="batch_b")
+    seed_incident(id="i_a", video_id="v_a", batch_id="batch_a")
+    seed_incident(id="i_b", video_id="v_b", batch_id="batch_b")
+
+    res = client.get("/api/incidents?batch_id=batch_a").json()
+    assert res["count"] == 1
+    assert res["incidents"][0]["id"] == "i_a"
+
+
+def test_prevention_accepts_a_batch_scope():
+    seed_video(video_id="v_p", batch_id="batch_p")
+    seed_incident(id="i_p", video_id="v_p", batch_id="batch_p")
+    res = client.get("/api/prevention?batch_id=batch_absent")
+    assert res.status_code == 200
+    assert res.json()["baseline"]["total_footage_minutes"] == 0

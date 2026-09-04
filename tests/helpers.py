@@ -109,6 +109,8 @@ def seed_incident(**overrides) -> dict:
         "bay": overrides.get("bay", "Dock 05"),
         "shift": overrides.get("shift", "Shift A"),
         "review_status": overrides.get("review_status", "PENDING_REVIEW"),
+
+        "batch_id": overrides.get("batch_id"),
         "duration_sec": 0.6,
         "evidence_image_path": overrides.get("evidence_image_path", "/x/evidence_inc_test01.jpg"),
     }
@@ -130,4 +132,5 @@ def seed_video(video_id: str = "vid_test01", **overrides) -> None:
         bay=overrides.get("bay", "Dock 05"),
         shift=overrides.get("shift", "Shift A"),
         camera_id=overrides.get("camera_id", "CAM-TEST"),
+        batch_id=overrides.get("batch_id"),
     )

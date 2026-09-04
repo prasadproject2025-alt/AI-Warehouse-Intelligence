@@ -70,11 +70,12 @@ class VideoProcessor:
         generate_annotated_video: bool = True,
         frame_stride: Optional[int] = None,
         scene: Optional[SceneContext] = None,
+        batch_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         video_id = video_id or f"vid_{uuid.uuid4().hex[:8]}"
         try:
             return self._run(
-                video_path, video_id, generate_annotated_video, frame_stride, scene
+                video_path, video_id, generate_annotated_video, frame_stride, scene, batch_id
             )
         except Exception as exc:  # noqa: BLE001 - background task must not die silently
             logger.exception("Video analysis failed for %s", video_path)
@@ -100,6 +101,7 @@ class VideoProcessor:
         generate_annotated_video: bool,
         frame_stride: Optional[int],
         scene: Optional[SceneContext],
+        batch_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -205,7 +207,7 @@ class VideoProcessor:
                 analysed += 1
 
                 for event in engine.process_frame(active_tracks, frame_idx, timestamp):
-                    inc = self._materialise_incident(event, video_id, scene, frame)
+                    inc = self._materialise_incident(event, video_id, scene, frame, batch_id)
                     all_incidents.append(inc)
                     if config.GENERATE_EVIDENCE_CLIPS:
                         pending_clips.append(
@@ -266,6 +268,7 @@ class VideoProcessor:
             detector_backend=self.detector.backend,
             frames_analysed=analysed,
             scene_flags=scene.to_dict(),
+            batch_id=batch_id,
         )
 
         result = {
@@ -297,7 +300,8 @@ class VideoProcessor:
 
     # ------------------------------------------------------------- incidents
     def _materialise_incident(
-        self, event, video_id: str, scene: SceneContext, frame: np.ndarray
+        self, event, video_id: str, scene: SceneContext, frame: np.ndarray,
+        batch_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         inc_id = f"inc_{uuid.uuid4().hex[:8]}"
         inc = {
@@ -323,6 +327,7 @@ class VideoProcessor:
             "bay": scene.bay,
             "shift": scene.shift,
             "review_status": "PENDING_REVIEW",
+            "batch_id": batch_id,
         }
         try:
             inc["evidence_image_path"] = create_evidence_snapshot(

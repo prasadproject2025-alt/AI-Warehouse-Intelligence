@@ -881,3 +881,37 @@
   .chat-bubble { max-width: 92%; }
   .alert-bar { padding-left: 18px; padding-right: 18px; }
 }
+
+/* ------------------------------------------------- dataset scope bar ---- */
+.dataset-bar {
+  width: 100%;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 14px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  background: var(--plum-tint);
+  border-bottom: 1px solid var(--plum-line);
+}
+
+.dataset-left, .dataset-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.dataset-label {
+  font-size: 0.64rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--plum);
+  font-weight: 700;
+}
+
+.dataset-progress { display: flex; flex-direction: column; gap: 5px; min-width: 300px; }
+.dataset-progress .progress-track { background: #fff; }
+.dataset-status { font-size: 0.74rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 720px) {
+  .dataset-bar { padding-left: 18px; padding-right: 18px; }
+  .dataset-progress { min-width: 200px; }
+}

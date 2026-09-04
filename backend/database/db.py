@@ -109,6 +109,7 @@ class DatabaseManager:
         detector_backend: Optional[str] = None,
         frames_analysed: Optional[int] = None,
         scene_flags: Optional[Dict[str, Any]] = None,
+        batch_id: Optional[str] = None,
     ) -> None:
         with _write_lock, get_connection() as conn:
             conn.execute(
@@ -116,14 +117,14 @@ class DatabaseManager:
                 INSERT OR REPLACE INTO videos
                 (id, filename, filepath, duration_sec, fps, frame_count, width, height, status,
                  annotated_filepath, camera_id, bay, shift, error_message, processing_seconds,
-                 detector_backend, frames_analysed, scene_flags)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 detector_backend, frames_analysed, scene_flags, batch_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     video_id, filename, filepath, duration, fps, frame_count, width, height,
                     status, annotated_path, camera_id, bay, shift, error_message,
                     processing_seconds, detector_backend, frames_analysed,
-                    json.dumps(scene_flags or {}),
+                    json.dumps(scene_flags or {}), batch_id,
                 ),
             )
             conn.commit()
@@ -170,8 +171,8 @@ class DatabaseManager:
                  operator_track_id, confidence, risk_level, risk_score, evidence_description,
                  root_cause, recommended_action, bounding_box, evidence_image_path,
                  camera_id, bay, shift, risk_factors, evidence_stages, evidence_clip_path,
-                 evidence_tier, review_status, duration_sec)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 evidence_tier, review_status, duration_sec, batch_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     incident_data["id"],
@@ -198,6 +199,7 @@ class DatabaseManager:
                     incident_data.get("evidence_tier", "OBSERVED_BEHAVIOUR"),
                     incident_data.get("review_status", "PENDING_REVIEW"),
                     incident_data.get("duration_sec", 0.0),
+                    incident_data.get("batch_id"),
                 ),
             )
             conn.commit()
@@ -209,6 +211,7 @@ class DatabaseManager:
         behaviour_type: Optional[str] = None,
         bay: Optional[str] = None,
         shift: Optional[str] = None,
+        batch_id: Optional[str] = None,
         since: Optional[str] = None,
         search: Optional[str] = None,
         limit: int = 100,
@@ -231,6 +234,9 @@ class DatabaseManager:
         if shift:
             query += " AND shift = ?"
             params.append(shift)
+        if batch_id:
+            query += " AND batch_id = ?"
+            params.append(batch_id)
         if since:
             query += " AND created_at >= ?"
             params.append(since)
@@ -297,20 +303,33 @@ class DatabaseManager:
             return int(row[0])
 
     @staticmethod
-    def get_analytics_summary() -> Dict[str, Any]:
+    def get_analytics_summary(batch_id: Optional[str] = None) -> Dict[str, Any]:
+        # A batch scope restricts every aggregate to one analysis run, so the
+        # dashboard can show exactly the dataset the user just processed rather
+        # than everything ever stored.
+        iw = " WHERE batch_id = ?" if batch_id else ""
+        vw = " AND batch_id = ?" if batch_id else ""
+        # Qualified form for the query that joins videos and incidents,
+        # where a bare batch_id would be ambiguous.
+        vw_q = " AND v.batch_id = ?" if batch_id else ""
+        ip = (batch_id,) if batch_id else ()
+
         with get_connection() as conn:
-            total_incidents = conn.execute("SELECT COUNT(*) FROM incidents").fetchone()[0]
+            total_incidents = conn.execute(
+                f"SELECT COUNT(*) FROM incidents{iw}", ip
+            ).fetchone()[0]
             videos_count = conn.execute(
-                "SELECT COUNT(*) FROM videos WHERE status='completed'"
+                f"SELECT COUNT(*) FROM videos WHERE status='completed'{vw}", ip
             ).fetchone()[0]
             total_minutes = conn.execute(
-                "SELECT COALESCE(SUM(duration_sec),0)/60.0 FROM videos WHERE status='completed'"
+                f"SELECT COALESCE(SUM(duration_sec),0)/60.0 FROM videos WHERE status='completed'{vw}",
+                ip,
             ).fetchone()[0]
 
             risk_counts = {
                 r[0]: r[1]
                 for r in conn.execute(
-                    "SELECT risk_level, COUNT(*) FROM incidents GROUP BY risk_level"
+                    f"SELECT risk_level, COUNT(*) FROM incidents{iw} GROUP BY risk_level", ip
                 ).fetchall()
             }
             behaviour_counts = {
@@ -325,7 +344,7 @@ class DatabaseManager:
                 for r in conn.execute(
                     "SELECT bay, COUNT(*), "
                     "SUM(CASE WHEN risk_level IN ('HIGH','CRITICAL') THEN 1 ELSE 0 END) "
-                    "FROM incidents GROUP BY bay ORDER BY 3 DESC, 2 DESC"
+                    f"FROM incidents{iw} GROUP BY bay ORDER BY 3 DESC, 2 DESC", ip
                 ).fetchall()
             ]
             by_shift = [
@@ -333,7 +352,7 @@ class DatabaseManager:
                 for r in conn.execute(
                     "SELECT shift, COUNT(*), "
                     "SUM(CASE WHEN risk_level IN ('HIGH','CRITICAL') THEN 1 ELSE 0 END) "
-                    "FROM incidents GROUP BY shift ORDER BY 3 DESC, 2 DESC"
+                    f"FROM incidents{iw} GROUP BY shift ORDER BY 3 DESC, 2 DESC", ip
                 ).fetchall()
             ]
             by_video = [
@@ -348,13 +367,13 @@ class DatabaseManager:
                     "SELECT v.id, v.filename, v.duration_sec, COUNT(i.id), "
                     "SUM(CASE WHEN i.risk_level IN ('HIGH','CRITICAL') THEN 1 ELSE 0 END) "
                     "FROM videos v LEFT JOIN incidents i ON i.video_id = v.id "
-                    "WHERE v.status='completed' GROUP BY v.id ORDER BY 4 DESC"
+                    f"WHERE v.status='completed'{vw_q} GROUP BY v.id ORDER BY 4 DESC", ip
                 ).fetchall()
             ]
             review = {
                 r[0] or "PENDING_REVIEW": r[1]
                 for r in conn.execute(
-                    "SELECT review_status, COUNT(*) FROM incidents GROUP BY review_status"
+                    f"SELECT review_status, COUNT(*) FROM incidents{iw} GROUP BY review_status", ip
                 ).fetchall()
             }
 
@@ -385,3 +404,50 @@ class DatabaseManager:
             "high_risk_events_per_minute": rate,
             "intervention_opportunities": high_and_critical,
         }
+
+    # ----------------------------------------------------------------- batches
+    @staticmethod
+    def list_batches() -> List[Dict[str, Any]]:
+        """Analysis runs, newest first, with what each one produced."""
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT v.batch_id,
+                          COUNT(DISTINCT v.id)                       AS videos,
+                          MIN(v.processed_at)                        AS started_at,
+                          COALESCE(SUM(v.duration_sec), 0) / 60.0    AS minutes,
+                          (SELECT COUNT(*) FROM incidents i WHERE i.batch_id = v.batch_id) AS incidents
+                   FROM videos v
+                   WHERE v.batch_id IS NOT NULL AND v.status = 'completed'
+                   GROUP BY v.batch_id
+                   ORDER BY started_at DESC"""
+            ).fetchall()
+            return [
+                {
+                    "batch_id": r["batch_id"],
+                    "videos": r["videos"],
+                    "incidents": r["incidents"],
+                    "footage_minutes": round(r["minutes"] or 0.0, 2),
+                    "started_at": r["started_at"],
+                }
+                for r in rows
+            ]
+
+    @staticmethod
+    def clear_analysis(batch_id: Optional[str] = None) -> int:
+        """
+        Remove analysis rows. Scoped to a batch when given, otherwise every
+        non-live video. Live sessions are left alone so a running monitor is
+        not silently orphaned.
+        """
+        with _write_lock, get_connection() as conn:
+            if batch_id:
+                conn.execute("DELETE FROM incidents WHERE batch_id = ?", (batch_id,))
+                cur = conn.execute("DELETE FROM videos WHERE batch_id = ?", (batch_id,))
+            else:
+                conn.execute(
+                    "DELETE FROM incidents WHERE video_id IN "
+                    "(SELECT id FROM videos WHERE id NOT LIKE 'live_%')"
+                )
+                cur = conn.execute("DELETE FROM videos WHERE id NOT LIKE 'live_%'")
+            conn.commit()
+            return cur.rowcount
