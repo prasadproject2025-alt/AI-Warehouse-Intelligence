@@ -1,498 +1,525 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  ShieldAlert, 
-  Video, 
-  Bot, 
-  BarChart3, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Play, 
-  Pause, 
-  RotateCcw, 
-  Upload, 
-  Send,
-  Eye,
-  Crosshair,
-  Flame,
-  ArrowRight,
-  TrendingDown,
-  Layers,
-  Sparkles,
-  Loader2
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle, BarChart3, Bot, CheckCircle2, ClipboardCheck, Crosshair, Eye,
+  FileVideo, GraduationCap, Layers, Loader2, MapPin, RefreshCw, Search, Send,
+  ShieldAlert, Sparkles, Upload, Video, XCircle,
 } from 'lucide-react';
 
+/* ------------------------------------------------------------------ helpers */
+
+const RISK_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+
+const titleCase = (s) => (s || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const fmtSec = (s) => `${Number(s || 0).toFixed(2)}s`;
+
+async function apiGet(path) {
+  const res = await fetch(path);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON error body */ }
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+async function apiSend(path, body, method = 'POST') {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch { /* non-JSON error body */ }
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+/** Minimal markdown renderer for assistant answers (bold, code, headings, lists). */
+function Markdown({ text }) {
+  const blocks = useMemo(() => {
+    const inline = (s) => {
+      const parts = [];
+      const re = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+      let last = 0, m;
+      while ((m = re.exec(s)) !== null) {
+        if (m.index > last) parts.push(s.slice(last, m.index));
+        const tok = m[0];
+        if (tok.startsWith('**')) parts.push(<strong key={parts.length}>{tok.slice(2, -2)}</strong>);
+        else if (tok.startsWith('`')) parts.push(<code key={parts.length} className="md-code">{tok.slice(1, -1)}</code>);
+        else parts.push(<em key={parts.length}>{tok.slice(1, -1)}</em>);
+        last = m.index + tok.length;
+      }
+      if (last < s.length) parts.push(s.slice(last));
+      return parts;
+    };
+    return (text || '').split('\n').map((line, i) => {
+      if (line.startsWith('### ')) return <h4 key={i} className="md-h">{inline(line.slice(4))}</h4>;
+      if (line.startsWith('## ')) return <h3 key={i} className="md-h">{inline(line.slice(3))}</h3>;
+      if (/^\s*[-*]\s/.test(line)) return <div key={i} className="md-li">{inline(line.replace(/^\s*[-*]\s/, ''))}</div>;
+      if (/^\s*\d+\.\s/.test(line)) return <div key={i} className="md-li">{inline(line.trim())}</div>;
+      if (!line.trim()) return <div key={i} className="md-gap" />;
+      return <div key={i} className="md-p">{inline(line)}</div>;
+    });
+  }, [text]);
+  return <div className="md">{blocks}</div>;
+}
+
+function RiskTag({ level }) {
+  return <span className={`risk-tag ${level}`}>{level}</span>;
+}
+
+function StatusPill({ status }) {
+  const map = {
+    IMPLEMENTED: ['ok', 'Implemented'],
+    PARTIALLY_IMPLEMENTED: ['warn', 'Partial'],
+    REQUIRES_ADDITIONAL_FOOTAGE: ['info', 'Needs footage'],
+    REQUIRES_MODEL_TRAINING: ['info', 'Needs training'],
+    REQUIRES_ZONE_CONFIGURATION: ['info', 'Needs config'],
+  };
+  const [cls, label] = map[status] || ['info', status];
+  return <span className={`status-pill ${cls}`}>{label}</span>;
+}
+
+function EmptyState({ icon: Icon, title, hint }) {
+  return (
+    <div className="empty-state">
+      <Icon size={30} />
+      <span className="empty-title">{title}</span>
+      {hint && <span className="empty-hint">{hint}</span>}
+    </div>
+  );
+}
+
+function Bar({ value, max, tone = 'blue' }) {
+  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+  return (
+    <div className="bar-track"><div className={`bar-fill ${tone}`} style={{ width: `${pct}%` }} /></div>
+  );
+}
+
+/* --------------------------------------------------------------------- app */
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('operations'); // 'operations', 'analytics', 'assistant', 'upload'
+  const [activeTab, setActiveTab] = useState('operations');
+  const [health, setHealth] = useState(null);
+  const [apiError, setApiError] = useState(null);
+
   const [videos, setVideos] = useState([]);
+  const [videosLoading, setVideosLoading] = useState(true);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [incidents, setIncidents] = useState([]);
+  const [incidentsLoading, setIncidentsLoading] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState(null);
+
   const [analytics, setAnalytics] = useState(null);
+  const [capabilities, setCapabilities] = useState(null);
+  const [prevention, setPrevention] = useState(null);
+
   const [riskFilter, setRiskFilter] = useState('ALL');
-  
-  // Assistant chat state
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      text: "👋 Welcome to **VisionGuard AI Field Intelligence Assistant**. I am actively monitoring warehouse material-handling operations. Ask me about detected high-risk behaviors, drop events, shift summaries, or root-cause recommendations!"
-    }
-  ]);
+  const [behaviourFilter, setBehaviourFilter] = useState('ALL');
+  const [search, setSearch] = useState('');
+  const [showAnnotated, setShowAnnotated] = useState(true);
+
+  const [messages, setMessages] = useState([{
+    role: 'assistant',
+    text: 'I answer only from events the vision pipeline actually recorded. If there is no evidence for a question, I will say so rather than guess.\n\nTry a question below, or ask your own.',
+  }]);
   const [inputQuery, setInputQuery] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
 
-  // Upload & processing state
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
+  const [uploadError, setUploadError] = useState('');
   const [activeTaskId, setActiveTaskId] = useState(null);
+  const [sceneForm, setSceneForm] = useState({
+    bay: 'Dock 01', shift: 'Shift A', camera_id: 'CAM-01',
+    floor_condition: 'unknown', dock_transfer: false,
+  });
 
   const videoRef = useRef(null);
   const chatEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
-  // Auto-scroll chat history to bottom like WhatsApp
+  /* ------------------------------------------------------------- data load */
+
+  const refreshAnalytics = useCallback(async () => {
+    try {
+      const [a, p] = await Promise.all([apiGet('/api/analytics'), apiGet('/api/prevention')]);
+      setAnalytics(a); setPrevention(p); setApiError(null);
+    } catch (err) { setApiError(err.message); }
+  }, []);
+
+  const selectVideo = useCallback(async (video) => {
+    setSelectedVideo(video);
+    setIncidentsLoading(true);
+    try {
+      const data = await apiGet(`/api/videos/${video.id}`);
+      setIncidents(data.incidents || []);
+      setSelectedIncident(data.incidents?.[0] || null);
+      setApiError(null);
+    } catch (err) {
+      setApiError(err.message); setIncidents([]); setSelectedIncident(null);
+    } finally { setIncidentsLoading(false); }
+  }, []);
+
+  const refreshVideos = useCallback(async (keepSelection = true) => {
+    setVideosLoading(true);
+    try {
+      const data = await apiGet('/api/videos');
+      setVideos(data.videos || []);
+      setApiError(null);
+      if (data.videos?.length) {
+        const keep = keepSelection && selectedVideo
+          ? data.videos.find((v) => v.id === selectedVideo.id)
+          : null;
+        if (!keep) await selectVideo(data.videos[0]);
+      } else {
+        setSelectedVideo(null); setIncidents([]); setSelectedIncident(null);
+      }
+    } catch (err) { setApiError(err.message); }
+    finally { setVideosLoading(false); }
+  }, [selectVideo, selectedVideo]);
+
+  useEffect(() => {
+    (async () => {
+      try { setHealth(await apiGet('/api/health')); } catch (err) { setApiError(err.message); }
+      try { setCapabilities(await apiGet('/api/capabilities')); } catch { /* non-fatal */ }
+      await refreshVideos(false);
+      await refreshAnalytics();
+    })();
+    // Intentionally run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'assistant') {
-      setTimeout(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 50);
+      const t = setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      return () => clearTimeout(t);
     }
   }, [messages, isChatLoading, activeTab]);
 
-  // Load initial videos and analytics
+  /* Poll the analysis task while one is running. */
   useEffect(() => {
-    fetchVideos();
-    fetchAnalytics();
-    const interval = setInterval(() => {
-      fetchAnalytics();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Poll upload progress if task is active
-  useEffect(() => {
-    if (!activeTaskId) return;
-
-    const pollInterval = setInterval(async () => {
+    if (!activeTaskId) return undefined;
+    const id = setInterval(async () => {
       try {
-        const res = await fetch(`/api/videos/${activeTaskId}/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        
+        const data = await apiGet(`/api/videos/${activeTaskId}/status`);
         if (data.status === 'processing') {
-          setUploadProgress(data.progress_percent || 10);
-          setUploadStatus(`Analyzing frames with YOLOv8 & Behaviour Engine: ${data.progress_percent}% (Frame ${data.current_frame}/${data.total_frames}) — ${data.incidents_count} incidents identified so far.`);
+          setUploadProgress(data.progress_percent || 1);
+          setUploadStatus(
+            `${data.stage || 'analysing'} — ${data.progress_percent || 0}% ` +
+            `(frame ${data.current_frame || 0}/${data.total_frames || '?'}), ` +
+            `${data.incidents_count || 0} risk event(s) so far`
+          );
         } else if (data.status === 'completed') {
           setUploadProgress(100);
-          setUploadStatus(`Processing Complete! Found ${data.incidents_count} handling incidents.`);
-          setActiveTaskId(null);
-          setIsUploading(false);
-          await fetchVideos();
-          await fetchAnalytics();
-          
-          // Switch to the newly analyzed video
-          const vidRes = await fetch(`/api/videos/${activeTaskId}`);
-          if (vidRes.ok) {
-            const vidData = await vidRes.json();
-            if (vidData.video) {
-              selectVideo(vidData.video);
-              setActiveTab('operations');
-            }
-          }
+          setUploadStatus(`Analysis complete — ${data.incidents_count} risk event(s) detected.`);
+          setActiveTaskId(null); setIsUploading(false);
+          await refreshVideos(false); await refreshAnalytics();
+          setCapabilities(await apiGet('/api/capabilities'));
+          setActiveTab('operations');
+        } else if (data.status === 'failed' || data.status === 'not_found') {
+          setActiveTaskId(null); setIsUploading(false);
+          setUploadError(data.error || 'Analysis failed. Check the server log for details.');
+          setUploadStatus('');
         }
-      } catch (err) {
-        console.error("Error polling status", err);
-      }
+      } catch (err) { setUploadError(err.message); }
     }, 1500);
+    return () => clearInterval(id);
+  }, [activeTaskId, refreshVideos, refreshAnalytics]);
 
-    return () => clearInterval(pollInterval);
-  }, [activeTaskId]);
+  /* ------------------------------------------------------------- handlers */
 
-  const fetchVideos = async () => {
-    try {
-      const res = await fetch('/api/videos');
-      const data = await res.json();
-      if (data.videos && data.videos.length > 0) {
-        setVideos(data.videos);
-        if (!selectedVideo) {
-          selectVideo(data.videos[0]);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to load videos", err);
-    }
+  const seekTo = (sec) => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.currentTime = Math.max(0, sec - 1.0);
+    el.play().catch(() => { /* autoplay may be blocked; user can press play */ });
   };
 
-  const fetchAnalytics = async () => {
-    try {
-      const res = await fetch('/api/analytics');
-      const data = await res.json();
-      setAnalytics(data);
-    } catch (err) {
-      console.error("Failed to load analytics", err);
-    }
-  };
-
-  const selectVideo = async (video) => {
-    setSelectedVideo(video);
-    try {
-      const res = await fetch(`/api/videos/${video.id}`);
-      const data = await res.json();
-      setIncidents(data.incidents || []);
-      if (data.incidents && data.incidents.length > 0) {
-        setSelectedIncident(data.incidents[0]);
-      } else {
-        setSelectedIncident(null);
-      }
-    } catch (err) {
-      console.error("Failed to load video details", err);
-    }
-  };
-
-  const seekToTimestamp = (sec) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = Math.max(0, sec - 0.2);
-      videoRef.current.play().catch(() => {});
-    }
-  };
-
-  const handleIncidentClick = (inc) => {
-    setSelectedIncident(inc);
-    seekToTimestamp(inc.timestamp_sec);
-  };
+  const handleIncidentClick = (inc) => { setSelectedIncident(inc); seekTo(inc.timestamp_sec); };
 
   const sendAssistantMessage = async (queryText) => {
-    const q = queryText || inputQuery;
-    if (!q.trim()) return;
-
-    const newMsgs = [...messages, { role: 'user', text: q }];
-    setMessages(newMsgs);
+    const q = (queryText ?? inputQuery).trim();
+    if (!q || isChatLoading) return;
+    const next = [...messages, { role: 'user', text: q }];
+    setMessages(next);
     if (!queryText) setInputQuery('');
     setIsChatLoading(true);
-
     try {
-      const res = await fetch('/api/assistant/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, video_id: selectedVideo?.id })
-      });
-      const data = await res.json();
-      setMessages([...newMsgs, { role: 'assistant', text: data.response }]);
+      const data = await apiSend('/api/assistant/chat', { query: q, video_id: selectedVideo?.id });
+      setMessages([...next, {
+        role: 'assistant', text: data.response,
+        meta: { count: data.relevant_count, intent: data.intent, total: data.total_incidents_in_db },
+      }]);
     } catch (err) {
-      setMessages([...newMsgs, { role: 'assistant', text: "⚠️ Error contacting AI Assistant service." }]);
-    } finally {
-      setIsChatLoading(false);
-    }
+      setMessages([...next, { role: 'assistant', text: `Could not reach the assistant service. ${err.message}`, error: true }]);
+    } finally { setIsChatLoading(false); }
   };
 
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    setIsUploading(true);
-    setUploadProgress(5);
-    setUploadStatus(`Uploading ${file.name} to VisionGuard server...`);
-
-    const formData = new FormData();
-    formData.append('file', file);
-
+    setIsUploading(true); setUploadProgress(2); setUploadError('');
+    setUploadStatus(`Uploading ${file.name}…`);
+    const form = new FormData();
+    form.append('file', file);
+    Object.entries(sceneForm).forEach(([k, v]) => form.append(k, String(v)));
     try {
-      const res = await fetch('/api/videos/upload', {
-        method: 'POST',
-        body: formData
-      });
-      
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Server returned error: ${errText.substring(0, 100)}`);
-      }
-      
-      const data = await res.json();
-      setUploadStatus(data.message || "Video upload accepted. Starting AI intelligence analysis...");
+      const res = await fetch('/api/videos/upload', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `Upload failed (${res.status})`);
+      setUploadStatus(data.message || 'Upload accepted. Analysis started.');
       setActiveTaskId(data.video_id);
     } catch (err) {
-      setUploadStatus(`Upload failed: ${err.message}`);
-      setIsUploading(false);
+      setUploadError(err.message); setIsUploading(false); setUploadStatus('');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const filteredIncidents = incidents.filter(i => {
-    if (riskFilter === 'ALL') return true;
-    return i.risk_level === riskFilter;
-  });
+  const reviewIncident = async (status) => {
+    if (!selectedIncident) return;
+    try {
+      const updated = await apiSend(`/api/incidents/${selectedIncident.id}/review`, { status }, 'PATCH');
+      setSelectedIncident(updated);
+      setIncidents((list) => list.map((i) => (i.id === updated.id ? updated : i)));
+      await refreshAnalytics();
+    } catch (err) { setApiError(err.message); }
+  };
+
+  /* --------------------------------------------------------------- derived */
+
+  const behaviourOptions = useMemo(
+    () => Array.from(new Set(incidents.map((i) => i.behaviour_type))).sort(),
+    [incidents],
+  );
+
+  const filteredIncidents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return incidents.filter((i) => {
+      if (riskFilter !== 'ALL' && i.risk_level !== riskFilter) return false;
+      if (behaviourFilter !== 'ALL' && i.behaviour_type !== behaviourFilter) return false;
+      if (q && !(`${i.behaviour_type} ${i.evidence_description} ${i.root_cause} ${i.bay}`)
+        .toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [incidents, riskFilter, behaviourFilter, search]);
+
+  const activeSrc = showAnnotated && selectedVideo?.annotated_video_url
+    ? selectedVideo.annotated_video_url
+    : selectedVideo?.video_url;
+
+  /* ----------------------------------------------------------------- views */
 
   return (
     <div className="app-container">
-      {/* Top Navbar */}
       <header className="navbar">
         <div className="nav-brand">
           <div className="brand-badge">GEG HACKATHON</div>
           <div className="brand-title">
             <span>VisionGuard</span>
-            <span className="brand-tag">FIELD INTELLIGENCE ASSISTANT</span>
+            <span className="brand-tag">WAREHOUSE FIELD INTELLIGENCE</span>
           </div>
         </div>
-
         <div className="nav-actions">
-          <div className="metric-pill">
-            <span className="dot"></span>
-            <span>AI Perception Pipeline: <strong>ONLINE (YOLOv8 + ByteTrack)</strong></span>
+          <div className={`metric-pill ${health ? '' : 'offline'}`}>
+            <span className={`dot ${health ? 'live' : 'dead'}`} />
+            <span>{health ? 'Backend online' : 'Backend unreachable'}</span>
           </div>
-          {analytics && (
+          {health && (
             <div className="metric-pill">
-              <span>Handling Discipline: <strong>{analytics.handling_discipline_score}%</strong></span>
+              <span>Perception:&nbsp;<strong>
+                {health.open_vocabulary ? 'YOLO-World open-vocabulary' : 'YOLOv8 COCO (fallback)'}
+              </strong></span>
             </div>
           )}
+          <button className="icon-btn" title="Refresh data"
+            onClick={() => { refreshVideos(true); refreshAnalytics(); }}>
+            <RefreshCw size={15} />
+          </button>
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <div className="tab-row">
-        <button 
-          className={`tab-btn ${activeTab === 'operations' ? 'active' : ''}`}
-          onClick={() => setActiveTab('operations')}
-        >
-          <Video size={16} /> Operations & Live Replay
-        </button>
-        <button 
-          className={`tab-btn ${activeTab === 'analytics' ? 'active' : ''}`}
-          onClick={() => setActiveTab('analytics')}
-        >
-          <BarChart3 size={16} /> Shift Behaviour Analytics
-        </button>
-        <button 
-          className={`tab-btn ${activeTab === 'assistant' ? 'active' : ''}`}
-          onClick={() => setActiveTab('assistant')}
-        >
-          <Bot size={16} /> AI Warehouse Assistant
-        </button>
-        <button 
-          className={`tab-btn ${activeTab === 'upload' ? 'active' : ''}`}
-          onClick={() => setActiveTab('upload')}
-        >
-          <Upload size={16} /> Ingest Warehouse Video
-        </button>
-      </div>
-
-      {/* KPI Stats Strip */}
-      <div className="dashboard-content" style={{ paddingBottom: '0' }}>
-        <div className="kpi-row">
-          <div className="kpi-card critical">
-            <span className="kpi-label">Critical Incidents</span>
-            <span className="kpi-val" style={{ color: 'var(--risk-critical)' }}>
-              {analytics?.risk_breakdown?.CRITICAL || 0}
-            </span>
-            <span className="kpi-sub">Severe drop or crushing risk</span>
-          </div>
-          <div className="kpi-card high">
-            <span className="kpi-label">High-Risk Events</span>
-            <span className="kpi-val" style={{ color: 'var(--risk-high)' }}>
-              {analytics?.risk_breakdown?.HIGH || 0}
-            </span>
-            <span className="kpi-sub">Immediate intervention needed</span>
-          </div>
-          <div className="kpi-card med">
-            <span className="kpi-label">Medium Risk</span>
-            <span className="kpi-val" style={{ color: 'var(--risk-med)' }}>
-              {analytics?.risk_breakdown?.MEDIUM || 0}
-            </span>
-            <span className="kpi-sub">Floor dragging / posture</span>
-          </div>
-          <div className="kpi-card low">
-            <span className="kpi-label">Discipline Index</span>
-            <span className="kpi-val" style={{ color: 'var(--risk-low)' }}>
-              {analytics?.handling_discipline_score || 100}%
-            </span>
-            <span className="kpi-sub">Shift compliance rating</span>
-          </div>
-          <div className="kpi-card score">
-            <span className="kpi-label">Damage Prevention</span>
-            <span className="kpi-val" style={{ color: 'var(--accent-cyan)' }}>
-              {(analytics?.risk_breakdown?.CRITICAL || 0) + (analytics?.risk_breakdown?.HIGH || 0)}
-            </span>
-            <span className="kpi-sub">Proactive Interventions</span>
-          </div>
+      {apiError && (
+        <div className="alert-bar error">
+          <XCircle size={15} /> <span>{apiError}</span>
+          <button onClick={() => setApiError(null)}>Dismiss</button>
         </div>
-      </div>
+      )}
 
-      {/* Main Tab Views */}
+      <nav className="tab-row">
+        {[
+          ['operations', Video, 'Operations & Replay'],
+          ['analytics', BarChart3, 'Shift Analytics'],
+          ['prevention', GraduationCap, 'Prevention & Learning'],
+          ['coverage', ClipboardCheck, 'Detection Coverage'],
+          ['assistant', Bot, 'AI Assistant'],
+          ['upload', Upload, 'Ingest Video'],
+        ].map(([key, Icon, label]) => (
+          <button key={key} className={`tab-btn ${activeTab === key ? 'active' : ''}`}
+            onClick={() => setActiveTab(key)}>
+            <Icon size={15} /> {label}
+          </button>
+        ))}
+      </nav>
+
+      <section className="kpi-row">
+        <KpiCard label="Critical risk events" value={analytics?.risk_breakdown?.CRITICAL ?? '—'}
+          sub="Immediate supervisor attention" tone="critical" />
+        <KpiCard label="High risk events" value={analytics?.risk_breakdown?.HIGH ?? '—'}
+          sub="Intervene this shift" tone="high" />
+        <KpiCard label="Medium risk events" value={analytics?.risk_breakdown?.MEDIUM ?? '—'}
+          sub="Coach at next briefing" tone="med" />
+        <KpiCard label="Intervention opportunities" value={analytics?.intervention_opportunities ?? '—'}
+          sub="High + critical, before damage occurs" tone="accent" />
+        <KpiCard label="Elevated events / minute"
+          value={analytics ? analytics.high_risk_events_per_minute.toFixed(2) : '—'}
+          sub={analytics ? `Baseline over ${analytics.total_footage_minutes.toFixed(1)} min analysed` : 'Baseline rate'}
+          tone="low" />
+      </section>
+
       {activeTab === 'operations' && (
         <main className="dashboard-content">
-          {/* Left Column: Video Player & Selector */}
           <div className="video-section">
             <div className="card">
               <div className="card-header">
                 <div className="card-title">
-                  <Crosshair size={18} color="var(--accent-cyan)" />
-                  <span>AI Video Perception: {selectedVideo?.filename || "Loading video..."}</span>
+                  <Crosshair size={17} />
+                  <span>{selectedVideo?.filename || 'No video selected'}</span>
                 </div>
-                {selectedIncident && (
-                  <span className={`risk-tag ${selectedIncident.risk_level}`}>
-                    {selectedIncident.risk_level} RISK
-                  </span>
-                )}
+                <div className="header-controls">
+                  {selectedVideo?.annotated_video_url && (
+                    <div className="toggle-group">
+                      <button className={showAnnotated ? 'active' : ''} onClick={() => setShowAnnotated(true)}>AI overlay</button>
+                      <button className={!showAnnotated ? 'active' : ''} onClick={() => setShowAnnotated(false)}>Original</button>
+                    </div>
+                  )}
+                  {selectedIncident && <RiskTag level={selectedIncident.risk_level} />}
+                </div>
               </div>
 
-              {/* Video Player Box */}
               <div className="video-container">
-                {selectedVideo ? (
-                  <video 
-                    ref={videoRef}
-                    className="main-video"
-                    controls
-                    playsInline
-                    preload="auto"
-                    key={selectedVideo.filename}
-                    src={`/static/raw/${selectedVideo.filename}`}
-                  />
+                {videosLoading ? (
+                  <div className="video-placeholder"><Loader2 className="spin" size={26} /><span>Loading footage…</span></div>
+                ) : selectedVideo ? (
+                  <video ref={videoRef} className="main-video" controls playsInline preload="metadata"
+                    key={activeSrc} src={activeSrc} />
                 ) : (
-                  <div style={{ color: 'var(--text-muted)' }}>Select or ingest a warehouse video to begin.</div>
+                  <EmptyState icon={FileVideo} title="No footage analysed yet"
+                    hint="Use the Ingest Video tab to upload warehouse loading/unloading footage." />
                 )}
-                
-                <div className="video-hud-overlay">
-                  <span className="rec-badge">AI LIVE INFERENCE</span>
-                  <span>720P HD @ 30 FPS</span>
-                  <span>PERSISTENT TRACKING ACTIVE</span>
-                </div>
               </div>
 
-              {/* Video Switcher Chips */}
-              <div className="video-selector-bar">
-                {videos.map(v => (
-                  <div 
-                    key={v.id} 
-                    className={`video-chip ${selectedVideo?.id === v.id ? 'active' : ''}`}
-                    onClick={() => selectVideo(v)}
-                  >
-                    <Video size={14} />
-                    <span>{v.filename}</span>
-                    <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>({v.incident_count || 0} alerts)</span>
+              {selectedVideo && (
+                <>
+                  <IncidentScrubber
+                    incidents={incidents}
+                    duration={selectedVideo.duration_sec}
+                    selectedId={selectedIncident?.id}
+                    onSelect={handleIncidentClick}
+                  />
+                  <div className="video-meta">
+                    <span><MapPin size={12} /> {selectedVideo.bay || 'Unassigned bay'}</span>
+                    <span>{selectedVideo.shift || 'Unassigned shift'}</span>
+                    <span>{selectedVideo.camera_id || 'CAM'}</span>
+                    <span>{Math.round(selectedVideo.width)}×{Math.round(selectedVideo.height)} @ {Math.round(selectedVideo.fps)}fps</span>
+                    <span>{Number(selectedVideo.duration_sec || 0).toFixed(1)}s</span>
+                    {selectedVideo.frames_analysed != null && <span>{selectedVideo.frames_analysed} frames analysed</span>}
+                    {selectedVideo.detector_backend && <span>backend: {selectedVideo.detector_backend}</span>}
                   </div>
+                </>
+              )}
+
+              <div className="video-selector-bar">
+                {videos.map((v) => (
+                  <button key={v.id}
+                    className={`video-chip ${selectedVideo?.id === v.id ? 'active' : ''}`}
+                    onClick={() => selectVideo(v)}>
+                    <Video size={13} />
+                    <span className="chip-name">{v.filename}</span>
+                    <span className="chip-count">{v.incident_count || 0}</span>
+                  </button>
                 ))}
               </div>
             </div>
 
-            {/* Timeline Filter and List */}
             <div className="card">
               <div className="card-header">
                 <div className="card-title">
-                  <ShieldAlert size={18} color="var(--risk-critical)" />
-                  <span>Detected Behaviour Timeline ({filteredIncidents.length} events)</span>
-                </div>
-
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  {['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(lvl => (
-                    <button
-                      key={lvl}
-                      onClick={() => setRiskFilter(lvl)}
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: '0.72rem',
-                        borderRadius: '4px',
-                        border: '1px solid var(--border-color)',
-                        background: riskFilter === lvl ? 'var(--accent-blue)' : 'var(--bg-surface)',
-                        color: '#fff',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {lvl}
-                    </button>
-                  ))}
+                  <ShieldAlert size={17} />
+                  <span>Behaviour timeline — {filteredIncidents.length} of {incidents.length} event(s)</span>
                 </div>
               </div>
 
-              <div className="timeline-list">
-                {filteredIncidents.length === 0 ? (
-                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    No events detected matching filter '{riskFilter}'.
-                  </div>
-                ) : (
-                  filteredIncidents.map(inc => (
-                    <div 
-                      key={inc.id}
-                      className={`incident-card ${selectedIncident?.id === inc.id ? 'active' : ''}`}
-                      onClick={() => handleIncidentClick(inc)}
-                    >
-                      <div className="incident-left">
-                        <span className={`risk-tag ${inc.risk_level}`}>
-                          {inc.risk_level}
-                        </span>
-                        <div className="incident-info">
-                          <span className="incident-name">
-                            {inc.behaviour_type.replace(/_/g, ' ').toUpperCase()}
-                          </span>
-                          <span className="incident-time">
-                            ⏱ {inc.timestamp_sec.toFixed(2)}s | Object #{inc.object_track_id || 'N/A'}
-                          </span>
-                        </div>
-                      </div>
+              <div className="filter-bar">
+                <div className="search-box">
+                  <Search size={14} />
+                  <input placeholder="Search behaviour, finding or bay…" value={search}
+                    onChange={(e) => setSearch(e.target.value)} />
+                </div>
+                <div className="chip-filters">
+                  {['ALL', ...RISK_ORDER].map((lvl) => (
+                    <button key={lvl} className={`filter-chip ${riskFilter === lvl ? 'active' : ''}`}
+                      onClick={() => setRiskFilter(lvl)}>{lvl}</button>
+                  ))}
+                </div>
+                <select className="select" value={behaviourFilter} onChange={(e) => setBehaviourFilter(e.target.value)}>
+                  <option value="ALL">All behaviours</option>
+                  {behaviourOptions.map((b) => <option key={b} value={b}>{titleCase(b)}</option>)}
+                </select>
+              </div>
 
-                      <div style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: '0.78rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                          Score: {inc.risk_score}
+              <div className="timeline-list">
+                {incidentsLoading ? (
+                  <div className="empty-state"><Loader2 className="spin" size={22} /><span>Loading events…</span></div>
+                ) : incidents.length === 0 ? (
+                  <EmptyState icon={CheckCircle2} title="No risky handling behaviour detected in this video"
+                    hint="That is a real result, not a placeholder — the pipeline analysed the footage and found nothing meeting the evidence thresholds." />
+                ) : filteredIncidents.length === 0 ? (
+                  <EmptyState icon={Search} title="No events match these filters"
+                    hint="Clear the search box or reset the risk filter." />
+                ) : filteredIncidents.map((inc) => (
+                  <button key={inc.id}
+                    className={`incident-card ${selectedIncident?.id === inc.id ? 'active' : ''}`}
+                    onClick={() => handleIncidentClick(inc)}>
+                    <div className="incident-left">
+                      <RiskTag level={inc.risk_level} />
+                      <div className="incident-info">
+                        <span className="incident-name">{titleCase(inc.behaviour_type)}</span>
+                        <span className="incident-time">
+                          {fmtSec(inc.timestamp_sec)} · object #{inc.object_track_id ?? '—'}
+                          {inc.duration_sec > 0 && ` · ${inc.duration_sec.toFixed(1)}s`}
                         </span>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-                          Click to Replay ❯
-                        </div>
                       </div>
                     </div>
-                  ))
-                )}
+                    <div className="incident-right">
+                      <span className="score">{Math.round(inc.risk_score)}</span>
+                      <span className="score-label">risk score</span>
+                      {inc.review_status && inc.review_status !== 'PENDING_REVIEW' && (
+                        <span className="reviewed-tag">reviewed</span>
+                      )}
+                    </div>
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
-          {/* Right Column: Evidence Inspector & Prescriptive Actions */}
           <aside className="inspector-panel">
             <div className="card">
               <div className="card-header">
-                <div className="card-title">
-                  <Eye size={18} color="var(--accent-cyan)" />
-                  <span>Incident Evidence Inspector</span>
-                </div>
+                <div className="card-title"><Eye size={17} /><span>Evidence inspector</span></div>
               </div>
-
-              <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                {selectedIncident ? (
-                  <>
-                    {/* Evidence Image Snapshot */}
-                    {selectedIncident.evidence_image_path && (
-                      <div>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
-                          ANNOTATED EVIDENCE FRAME (T: {selectedIncident.timestamp_sec}s)
-                        </span>
-                        <img 
-                          src={`/static/evidence/${selectedIncident.evidence_image_path.split(/[/\\]/).pop()}`} 
-                          alt="Incident Evidence"
-                          className="evidence-preview-img"
-                        />
-                      </div>
-                    )}
-
-                    {/* Operational Details */}
-                    <div className="info-block">
-                      <span className="info-block-title">Observed Behavior & Physical Metrics</span>
-                      <span className="info-block-text">{selectedIncident.evidence_description}</span>
-                    </div>
-
-                    <div className="info-block">
-                      <span className="info-block-title">Operational Root Cause</span>
-                      <span className="info-block-text">{selectedIncident.root_cause}</span>
-                    </div>
-
-                    {/* Prescriptive Corrective Intervention */}
-                    <div className="info-block rec-box">
-                      <span className="info-block-title" style={{ color: 'var(--risk-low)' }}>
-                        Recommended Supervisor Intervention
-                      </span>
-                      <span className="info-block-text" style={{ fontWeight: 600 }}>
-                        {selectedIncident.recommended_action}
-                      </span>
-                    </div>
-                  </>
+              <div className="inspector-body">
+                {!selectedIncident ? (
+                  <EmptyState icon={Eye} title="Select an event"
+                    hint="Pick an event from the timeline to inspect its evidence and reasoning." />
                 ) : (
-                  <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    Click an incident on the timeline to inspect evidence frame and root-cause analysis.
-                  </div>
+                  <IncidentDetail incident={selectedIncident} onReview={reviewIncident} onSeek={seekTo} />
                 )}
               </div>
             </div>
@@ -500,215 +527,501 @@ export default function App() {
         </main>
       )}
 
-      {/* Analytics Tab */}
       {activeTab === 'analytics' && (
-        <main className="dashboard-content" style={{ gridTemplateColumns: '1fr' }}>
-          <div className="card" style={{ padding: '24px' }}>
-            <h2 style={{ fontSize: '1.2rem', fontWeight: 800, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <BarChart3 color="var(--accent-cyan)" />
-              Shift Behaviour & Damage Prevention Analytics
-            </h2>
-
-            {analytics && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-                {/* Pareto Chart */}
-                <div className="info-block">
-                  <span className="info-block-title">Top Detected Risky Behaviours (Pareto Breakdown)</span>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '12px' }}>
-                    {Object.entries(analytics.top_behaviours || {}).map(([bName, count]) => {
-                      const pct = Math.round((count / Math.max(1, analytics.total_incidents)) * 100);
-                      return (
-                        <div key={bName} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.84rem' }}>
-                            <span style={{ fontWeight: 600 }}>{bName.replace(/_/g, ' ').toUpperCase()}</span>
-                            <span style={{ color: 'var(--text-muted)' }}>{count} events ({pct}%)</span>
-                          </div>
-                          <div style={{ width: '100%', height: '8px', background: 'var(--bg-main)', borderRadius: '4px', overflow: 'hidden' }}>
-                            <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, #38bdf8, #2563eb)' }}></div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* 10 Scenarios Coverage Table */}
-                <div className="info-block">
-                  <span className="info-block-title">GEG Challenge: 10 Target Behaviour Taxonomy Coverage</span>
-                  <table style={{ width: '100%', marginTop: '12px', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)' }}>
-                        <th style={{ padding: '6px' }}>Behaviour Scenario</th>
-                        <th style={{ padding: '6px' }}>Detection Type</th>
-                        <th style={{ padding: '6px' }}>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[
-                        ['Product Dropping', 'Downward Acceleration & Impact Deceleration', 'Active'],
-                        ['Product Dragging', 'Floor Plane Horizontal Translation', 'Active'],
-                        ['Product Throwing / Pushing', 'Release Velocity & Spatial Detachment', 'Active'],
-                        ['Rolling Cartons / Mattresses', 'Aspect-Ratio Tumbling Cycles', 'Active'],
-                        ['Improper Stacking / Inversion', 'Heavy-on-Light Vertical Inversion', 'Active'],
-                        ['Stepping on Cartons', 'Operator Foot Contact on Product Top', 'Active'],
-                        ['Using Straps to Pull', 'Tensile Strap Pull Without Base Support', 'Active'],
-                        ['Dragging on Wet Floor', 'Floor Moisture Contact Zone', 'Active'],
-                        ['Vertical Product Kept Flat', 'Upright Aspect-Ratio Deviation', 'Active'],
-                        ['Dock Level Hazard', 'Uneven Bed-to-Dock Transition Shock', 'Active']
-                      ].map(([name, method, stat]) => (
-                        <tr key={name} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <td style={{ padding: '8px 6px', fontWeight: 600 }}>{name}</td>
-                          <td style={{ padding: '8px 6px', color: 'var(--text-dim)' }}>{method}</td>
-                          <td style={{ padding: '8px 6px', color: 'var(--risk-low)', fontWeight: 700 }}>✓ {stat}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
+        <main className="dashboard-content single">
+          <AnalyticsView analytics={analytics} />
         </main>
       )}
 
-      {/* AI Assistant Tab */}
+      {activeTab === 'prevention' && (
+        <main className="dashboard-content single">
+          <PreventionView prevention={prevention} />
+        </main>
+      )}
+
+      {activeTab === 'coverage' && (
+        <main className="dashboard-content single">
+          <CoverageView capabilities={capabilities} />
+        </main>
+      )}
+
       {activeTab === 'assistant' && (
-        <main className="dashboard-content" style={{ gridTemplateColumns: '1fr' }}>
+        <main className="dashboard-content single">
           <div className="card assistant-panel">
             <div className="card-header">
-              <div className="card-title">
-                <Bot size={20} color="var(--accent-cyan)" />
-                <span>AI Warehouse Operations Assistant (Grounded Factual Reasoning)</span>
-              </div>
-              <span className="brand-tag">ZERO HALLUCINATION GUARANTEE</span>
+              <div className="card-title"><Bot size={18} /><span>AI operations assistant</span></div>
+              <span className="brand-tag">ANSWERS RETRIEVED FROM THE INCIDENT DATABASE</span>
             </div>
-
-            {/* Message History */}
             <div className="chat-history">
               {messages.map((m, idx) => (
-                <div key={idx} className={`chat-bubble ${m.role}`}>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>
-                    {m.text}
-                  </div>
+                <div key={idx} className={`chat-bubble ${m.role} ${m.error ? 'error' : ''}`}>
+                  <Markdown text={m.text} />
+                  {m.meta && (
+                    <div className="chat-meta">
+                      grounded in {m.meta.count} retrieved event(s) · intent: {m.meta.intent} · {m.meta.total} events in database
+                    </div>
+                  )}
                 </div>
               ))}
               {isChatLoading && (
-                <div className="chat-bubble assistant" style={{ color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>Analyzing warehouse event database...</span>
+                <div className="chat-bubble assistant loading">
+                  <Loader2 size={15} className="spin" /> <span>Querying the incident database…</span>
                 </div>
               )}
-              <div ref={chatEndRef} style={{ height: '1px' }} />
+              <div ref={chatEndRef} />
             </div>
-
-            {/* Quick Prompts */}
             <div className="quick-prompts">
               {[
-                "Show me all high-risk handling events",
-                "What were the three most common risky behaviours?",
-                "How many product drops were detected?",
-                "Why was this event classified as high risk?",
-                "Summarize shift handling discipline"
-              ].map(qp => (
-                <span 
-                  key={qp} 
-                  className="prompt-pill"
-                  onClick={() => sendAssistantMessage(qp)}
-                >
+                'Show me all high-risk handling events',
+                'What were the three most common risky behaviours?',
+                'Which loading bay had the highest number of risky events?',
+                'Why was this event classified as high risk?',
+                'What corrective action is recommended?',
+                'How many product drops were detected?',
+              ].map((qp) => (
+                <button key={qp} className="prompt-pill" onClick={() => sendAssistantMessage(qp)} disabled={isChatLoading}>
                   {qp}
-                </span>
+                </button>
               ))}
             </div>
-
-            {/* Input Bar */}
             <div className="chat-input-bar">
-              <input 
-                type="text"
-                className="chat-input"
-                placeholder="Ask the AI supervisor assistant about warehouse incidents, root causes, or training needs..."
-                value={inputQuery}
-                onChange={e => setInputQuery(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && sendAssistantMessage()}
-              />
-              <button className="chat-send-btn" onClick={() => sendAssistantMessage()}>
-                <Send size={16} />
+              <input className="chat-input" placeholder="Ask about incidents, bays, shifts, root causes or corrective actions…"
+                value={inputQuery} onChange={(e) => setInputQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && sendAssistantMessage()} />
+              <button className="chat-send-btn" onClick={() => sendAssistantMessage()} disabled={isChatLoading}>
+                <Send size={15} />
               </button>
             </div>
           </div>
         </main>
       )}
 
-      {/* Ingest / Upload Tab */}
       {activeTab === 'upload' && (
-        <main className="dashboard-content" style={{ gridTemplateColumns: '1fr' }}>
-          <div className="card" style={{ padding: '36px', textAlign: 'center' }}>
-            <Upload size={48} color="var(--accent-cyan)" style={{ margin: '0 auto 16px auto' }} />
-            <h2 style={{ fontSize: '1.3rem', fontWeight: 800, marginBottom: '8px' }}>
-              Ingest Warehouse Video for AI Analysis
-            </h2>
-            <p style={{ color: 'var(--text-muted)', maxWidth: '540px', margin: '0 auto 24px auto', fontSize: '0.9rem' }}>
-              Upload any recorded CCTV or smartphone footage from loading/unloading bays. VisionGuard will automatically detect objects, track persistent IDs, identify risky handling behaviours, and generate actionable evidence.
-            </p>
+        <main className="dashboard-content single">
+          <div className="card ingest-card">
+            <div className="card-header">
+              <div className="card-title"><Upload size={17} /><span>Ingest warehouse footage</span></div>
+            </div>
+            <div className="ingest-body">
+              <p className="ingest-lead">
+                Upload recorded CCTV or smartphone footage of a loading/unloading operation.
+                The scene context below is what the wet-floor, dock and staging-zone detectors
+                reason against — it is site knowledge the camera cannot infer.
+              </p>
 
-            <input 
-              type="file" 
-              accept="video/mp4,video/avi,video/mov" 
-              id="video-file-input"
-              style={{ display: 'none' }}
-              onChange={handleFileUpload}
-              disabled={isUploading}
-            />
-            <label 
-              htmlFor="video-file-input" 
-              className="chat-send-btn"
-              style={{ 
-                display: 'inline-flex', 
-                alignItems: 'center',
-                gap: '8px',
-                padding: '12px 28px', 
-                fontSize: '0.95rem', 
-                cursor: isUploading ? 'not-allowed' : 'pointer', 
-                margin: '0 auto',
-                opacity: isUploading ? 0.6 : 1
-              }}
-            >
-              {isUploading ? (
-                <>
-                  <Loader2 size={18} className="animate-spin" />
-                  <span>Processing Video...</span>
-                </>
-              ) : (
-                <span>Select MP4 Video File</span>
+              <div className="form-grid">
+                <label>Loading bay
+                  <input value={sceneForm.bay} onChange={(e) => setSceneForm({ ...sceneForm, bay: e.target.value })} />
+                </label>
+                <label>Shift
+                  <select value={sceneForm.shift} onChange={(e) => setSceneForm({ ...sceneForm, shift: e.target.value })}>
+                    <option>Shift A</option><option>Shift B</option><option>Shift C</option>
+                    <option>Unassigned Shift</option>
+                  </select>
+                </label>
+                <label>Camera ID
+                  <input value={sceneForm.camera_id} onChange={(e) => setSceneForm({ ...sceneForm, camera_id: e.target.value })} />
+                </label>
+                <label>Floor condition
+                  <select value={sceneForm.floor_condition}
+                    onChange={(e) => setSceneForm({ ...sceneForm, floor_condition: e.target.value })}>
+                    <option value="unknown">Unknown / not reported</option>
+                    <option value="dry">Dry</option>
+                    <option value="wet">Wet</option>
+                  </select>
+                </label>
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={sceneForm.dock_transfer}
+                    onChange={(e) => setSceneForm({ ...sceneForm, dock_transfer: e.target.checked })} />
+                  Camera covers a vehicle dock transition
+                </label>
+              </div>
+
+              <input ref={fileInputRef} type="file" accept="video/mp4,video/x-msvideo,video/quicktime,video/x-matroska,video/webm"
+                id="video-file-input" style={{ display: 'none' }} onChange={handleFileUpload} disabled={isUploading} />
+              <label htmlFor="video-file-input" className={`primary-btn ${isUploading ? 'disabled' : ''}`}>
+                {isUploading ? (<><Loader2 size={17} className="spin" /> Analysing…</>) : (<><Upload size={17} /> Select video file</>)}
+              </label>
+
+              {isUploading && (
+                <div className="progress-wrap">
+                  <div className="progress-track"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
+                  <div className="progress-label">{uploadProgress}%</div>
+                </div>
               )}
-            </label>
-
-            {/* Progress Bar & Live Status */}
-            {isUploading && (
-              <div style={{ maxWidth: '600px', margin: '24px auto 0 auto' }}>
-                <div style={{ width: '100%', height: '10px', background: 'var(--bg-main)', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-                  <div 
-                    style={{ 
-                      width: `${uploadProgress}%`, 
-                      height: '100%', 
-                      background: 'linear-gradient(90deg, #38bdf8, #2563eb)',
-                      transition: 'width 0.3s ease'
-                    }}
-                  />
-                </div>
-                <div style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--accent-cyan)', fontFamily: 'JetBrains Mono' }}>
-                  {uploadProgress}% Completed
-                </div>
-              </div>
-            )}
-
-            {uploadStatus && (
-              <div style={{ marginTop: '16px', padding: '14px', background: 'var(--bg-surface)', borderRadius: '8px', maxWidth: '600px', margin: '16px auto 0 auto', color: 'var(--text-main)', fontFamily: 'JetBrains Mono', fontSize: '0.85rem', lineHeight: '1.4' }}>
-                {uploadStatus}
-              </div>
-            )}
+              {uploadStatus && <div className="status-box">{uploadStatus}</div>}
+              {uploadError && (
+                <div className="status-box error"><AlertTriangle size={14} /> {uploadError}</div>
+              )}
+            </div>
           </div>
         </main>
       )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------- components */
+
+function KpiCard({ label, value, sub, tone }) {
+  return (
+    <div className={`kpi-card ${tone}`}>
+      <span className="kpi-label">{label}</span>
+      <span className="kpi-val">{value}</span>
+      <span className="kpi-sub">{sub}</span>
+    </div>
+  );
+}
+
+/** Timeline scrubber showing every incident as a clickable marker. */
+function IncidentScrubber({ incidents, duration, selectedId, onSelect }) {
+  if (!duration || duration <= 0 || incidents.length === 0) return null;
+  return (
+    <div className="scrubber">
+      <div className="scrubber-track">
+        {incidents.map((inc) => (
+          <button key={inc.id}
+            className={`marker ${inc.risk_level} ${selectedId === inc.id ? 'active' : ''}`}
+            style={{ left: `${Math.min(99, (inc.timestamp_sec / duration) * 100)}%` }}
+            title={`${titleCase(inc.behaviour_type)} — ${inc.risk_level} at ${fmtSec(inc.timestamp_sec)}`}
+            onClick={() => onSelect(inc)} />
+        ))}
+      </div>
+      <div className="scrubber-labels"><span>0s</span><span>{duration.toFixed(1)}s</span></div>
+    </div>
+  );
+}
+
+function IncidentDetail({ incident, onReview, onSeek }) {
+  const tierLabel = {
+    OBSERVED_BEHAVIOUR: 'Observed behaviour',
+    POTENTIAL_RISK: 'Potential damage risk',
+    CONFIRMED_DAMAGE: 'Damage confirmed by reviewer',
+  }[incident.evidence_tier] || 'Observed behaviour';
+
+  return (
+    <>
+      <div className="detail-head">
+        <RiskTag level={incident.risk_level} />
+        <span className="detail-behaviour">{titleCase(incident.behaviour_type)}</span>
+        <button className="link-btn" onClick={() => onSeek(incident.timestamp_sec)}>
+          Replay at {fmtSec(incident.timestamp_sec)}
+        </button>
+      </div>
+
+      <div className="tier-banner">
+        <AlertTriangle size={13} />
+        <span><strong>{tierLabel}</strong> — the system reports handling risk, not confirmed damage.
+          Physical inspection is required before any damage conclusion.</span>
+      </div>
+
+      {incident.evidence_image_url && (
+        <div className="evidence-block">
+          <span className="block-label">Annotated evidence frame</span>
+          <img src={incident.evidence_image_url} alt="Incident evidence" className="evidence-img" />
+        </div>
+      )}
+
+      {incident.evidence_clip_url && (
+        <div className="evidence-block">
+          <span className="block-label">Incident replay clip</span>
+          <video className="evidence-clip" controls preload="metadata" src={incident.evidence_clip_url} />
+        </div>
+      )}
+
+      <div className="info-block">
+        <span className="info-block-title">What was observed</span>
+        <span className="info-block-text">{incident.evidence_description}</span>
+      </div>
+
+      {incident.evidence_stages?.length > 0 && (
+        <div className="info-block">
+          <span className="info-block-title">Temporal sequence (why this is not a single-frame guess)</span>
+          <div className="stage-chain">
+            {incident.evidence_stages.map((s, i) => (
+              <React.Fragment key={i}>
+                <span className="stage">{s.stage}<em>{s.at_sec}s</em></span>
+                {i < incident.evidence_stages.length - 1 && <span className="stage-arrow">→</span>}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {incident.risk_factors?.length > 0 && (
+        <div className="info-block">
+          <span className="info-block-title">
+            Risk score breakdown — {Math.round(incident.risk_score)}/100
+          </span>
+          <div className="factor-list">
+            {incident.risk_factors.map((f, i) => (
+              <div key={i} className="factor">
+                <span className={`factor-pts ${f.points >= 0 ? 'pos' : 'neg'}`}>
+                  {f.points >= 0 ? '+' : ''}{Math.round(f.points)}
+                </span>
+                <div className="factor-body">
+                  <span className="factor-name">{f.name}</span>
+                  <span className="factor-detail">{f.detail}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="info-block">
+        <span className="info-block-title">Operational root cause</span>
+        <span className="info-block-text">{incident.root_cause}</span>
+      </div>
+
+      <div className="info-block rec-box">
+        <span className="info-block-title">Recommended supervisor action</span>
+        <span className="info-block-text strong">{incident.recommended_action}</span>
+      </div>
+
+      <div className="info-block">
+        <span className="info-block-title">Human review</span>
+        <span className="info-block-text muted">
+          Current status: <strong>{titleCase(incident.review_status || 'PENDING_REVIEW')}</strong>.
+          Only a reviewer can mark damage as confirmed — the AI never does.
+        </span>
+        <div className="review-actions">
+          <button onClick={() => onReview('CONFIRMED_BY_SUPERVISOR')}>Confirm behaviour</button>
+          <button onClick={() => onReview('FALSE_POSITIVE')}>Mark false positive</button>
+          <button onClick={() => onReview('DAMAGE_CONFIRMED')}>Damage confirmed on inspection</button>
+          <button onClick={() => onReview('NO_ACTION_NEEDED')}>No action needed</button>
+        </div>
+      </div>
+
+      <div className="meta-row">
+        <span>Bay: {incident.bay || '—'}</span>
+        <span>Shift: {incident.shift || '—'}</span>
+        <span>Camera: {incident.camera_id || '—'}</span>
+        <span>Detection confidence: {(incident.confidence * 100).toFixed(0)}%</span>
+      </div>
+    </>
+  );
+}
+
+function AnalyticsView({ analytics }) {
+  if (!analytics) return <div className="card"><EmptyState icon={Loader2} title="Loading analytics…" /></div>;
+  if (analytics.total_incidents === 0) {
+    return (
+      <div className="card">
+        <EmptyState icon={BarChart3} title="No analytics yet"
+          hint="Analytics are computed from recorded events only. Ingest footage to populate this view." />
+      </div>
+    );
+  }
+  const behaviours = Object.entries(analytics.top_behaviours || {});
+  const maxB = Math.max(...behaviours.map(([, c]) => c), 1);
+  const maxBay = Math.max(...(analytics.by_bay || []).map((b) => b.total), 1);
+
+  return (
+    <>
+      <div className="card pad">
+        <h2 className="section-title"><BarChart3 size={18} /> Behaviour Pareto</h2>
+        <p className="section-note">
+          Counts are of detected events across {analytics.total_footage_minutes.toFixed(1)} minutes
+          of analysed footage. Focusing on the top bars removes most of the risk.
+        </p>
+        <div className="chart-list">
+          {behaviours.map(([b, c]) => (
+            <div key={b} className="chart-row">
+              <div className="chart-label">
+                <span>{titleCase(b)}</span>
+                <span className="chart-value">{c} ({Math.round((c / analytics.total_incidents) * 100)}%)</span>
+              </div>
+              <Bar value={c} max={maxB} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="card pad">
+          <h2 className="section-title"><MapPin size={17} /> Risk by loading bay</h2>
+          {(analytics.by_bay || []).length === 0 ? (
+            <EmptyState icon={MapPin} title="No bay data" />
+          ) : (
+            <div className="chart-list">
+              {analytics.by_bay.map((b) => (
+                <div key={b.bay} className="chart-row">
+                  <div className="chart-label">
+                    <span>{b.bay}</span>
+                    <span className="chart-value">{b.total} events · {b.high_risk} elevated</span>
+                  </div>
+                  <Bar value={b.total} max={maxBay} tone="amber" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card pad">
+          <h2 className="section-title"><Layers size={17} /> Risk mix &amp; review status</h2>
+          <div className="stat-grid">
+            {RISK_ORDER.map((lvl) => (
+              <div key={lvl} className="stat-tile">
+                <span className={`stat-val ${lvl}`}>{analytics.risk_breakdown[lvl]}</span>
+                <span className="stat-lbl">{lvl}</span>
+              </div>
+            ))}
+          </div>
+          <div className="review-summary">
+            {Object.entries(analytics.review_breakdown || {}).map(([k, v]) => (
+              <div key={k} className="review-line"><span>{titleCase(k)}</span><strong>{v}</strong></div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="card pad">
+        <h2 className="section-title"><Video size={17} /> Per-video results</h2>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead><tr><th>Video</th><th>Duration</th><th>Events</th><th>Elevated risk</th><th>Events / min</th></tr></thead>
+            <tbody>
+              {(analytics.by_video || []).map((v) => (
+                <tr key={v.video_id}>
+                  <td className="wrap">{v.filename}</td>
+                  <td>{v.duration_sec.toFixed(1)}s</td>
+                  <td>{v.total}</td>
+                  <td>{v.high_risk}</td>
+                  <td>{v.duration_sec > 0 ? (v.total / (v.duration_sec / 60)).toFixed(1) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="card pad">
+          <h2 className="section-title">Shift comparison</h2>
+          <div className="chart-list">
+            {(analytics.by_shift || []).map((s) => (
+              <div key={s.shift} className="chart-row">
+                <div className="chart-label"><span>{s.shift}</span>
+                  <span className="chart-value">{s.total} events · {s.high_risk} elevated</span></div>
+                <Bar value={s.total} max={Math.max(...analytics.by_shift.map((x) => x.total), 1)} tone="violet" />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="card pad">
+          <h2 className="section-title">Damage prevention framing</h2>
+          <p className="prevention-statement">
+            <strong>{analytics.intervention_opportunities}</strong> high-risk handling events were
+            identified across <strong>{analytics.total_footage_minutes.toFixed(1)} minutes</strong> of
+            footage — each one an opportunity to intervene <em>before</em> damage occurs.
+          </p>
+          <p className="section-note">
+            This is deliberately not phrased as “N products damaged”. The system observes handling
+            behaviour and infers risk; whether damage actually resulted can only be established by
+            physical inspection, recorded through the human-review workflow.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function PreventionView({ prevention }) {
+  if (!prevention) return <div className="card"><EmptyState icon={Loader2} title="Loading prevention insights…" /></div>;
+  const { recurring_behaviours: recurring = [], high_risk_locations: hotspots = [], baseline } = prevention;
+  return (
+    <>
+      <div className="card pad">
+        <h2 className="section-title"><RefreshCw size={17} /> Recurring behaviours &amp; training opportunities</h2>
+        {recurring.length === 0 ? (
+          <EmptyState icon={CheckCircle2} title="No behaviour has recurred yet"
+            hint="A behaviour appears here once it has been detected at least twice." />
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Behaviour</th><th>Occurrences</th><th>Share</th><th>Suggested coaching topic</th></tr></thead>
+              <tbody>
+                {recurring.map((r) => (
+                  <tr key={r.behaviour_type}>
+                    <td><strong>{titleCase(r.behaviour_type)}</strong></td>
+                    <td>{r.occurrences}</td>
+                    <td>{r.share_percent}%</td>
+                    <td className="wrap">{r.training_topic}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="grid-2">
+        <div className="card pad">
+          <h2 className="section-title"><MapPin size={17} /> High-risk locations</h2>
+          {hotspots.length === 0 ? <EmptyState icon={MapPin} title="No elevated-risk location recorded" /> : (
+            <div className="chart-list">
+              {hotspots.map((h) => (
+                <div key={h.bay} className="hotspot">
+                  <span className="hotspot-name">{h.bay}</span>
+                  <span className="hotspot-val">{h.high_risk} elevated of {h.total} events</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="card pad">
+          <h2 className="section-title"><Sparkles size={17} /> Improvement tracking</h2>
+          <div className="baseline-box">
+            <span className="baseline-val">{baseline.high_risk_events_per_minute.toFixed(2)}</span>
+            <span className="baseline-lbl">elevated-risk events per minute of footage</span>
+          </div>
+          <p className="section-note">{baseline.note}</p>
+          <p className="section-note">
+            Measured over {baseline.total_footage_minutes.toFixed(1)} minutes. Re-analyse footage from a
+            later shift with the same bays to see whether coaching moved this number.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function CoverageView({ capabilities }) {
+  if (!capabilities) return <div className="card"><EmptyState icon={Loader2} title="Loading capability report…" /></div>;
+  const { behaviours = [], counts = {} } = capabilities;
+  return (
+    <div className="card pad">
+      <h2 className="section-title"><ClipboardCheck size={18} /> Detection coverage — honest status</h2>
+      <p className="section-note">
+        This table is generated from the detector implementations themselves, so it cannot claim a
+        capability the code does not have. “Events recorded” is the real count from the database —
+        a detector can be fully implemented and still show zero if the footage contains no such behaviour.
+      </p>
+      <div className="coverage-counts">
+        <span><strong>{counts.implemented}</strong> implemented</span>
+        <span><strong>{counts.partial}</strong> partial</span>
+        <span><strong>{counts.requires_config}</strong> need configuration or footage</span>
+        <span><strong>{counts.total}</strong> behaviours defined</span>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr><th>Behaviour</th><th>Detection method</th><th>Status</th><th>Events recorded</th><th>Known limitations</th></tr>
+          </thead>
+          <tbody>
+            {behaviours.map((b) => (
+              <tr key={b.behaviour_type}>
+                <td><strong>{b.label}</strong></td>
+                <td className="wrap dim">{b.method}</td>
+                <td><StatusPill status={b.status} /></td>
+                <td className={b.events_recorded > 0 ? 'ok-num' : 'dim'}>{b.events_recorded}</td>
+                <td className="wrap dim small">{b.limitations}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

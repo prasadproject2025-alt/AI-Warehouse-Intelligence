@@ -1,111 +1,161 @@
-# VisionGuard — Hackathon Presentation Deck
-## Godrej Enterprises Group (GEG) Hackathon: AI Video Intelligence for Warehouse Handling
-**Submission Date**: 10th September 2026 | **Contact**: `pudeshi@godrej.com` | **Submission Portal**: [GEG Registration Form](https://forms.cloud.microsoft/r/NLHbJUJ7ru)
+# VisionGuard — Presentation Deck Outline
 
----
+GEG requirement: minimum 5, maximum 6 slides. This is 6.
 
-### Slide 1: Solution & Team Overview
-* **Application Name**: **VisionGuard — AI Field Intelligence Assistant**
-* **One-Line Value Proposition**: *"Transforming passive warehouse cameras into proactive AI operational assistants to eliminate product damage and instill disciplined material handling before losses occur."*
-* **Core Philosophy**:
-  $$\text{Damage Prevention} > \text{Damage Detection} \quad \Big| \quad \text{Operational Intelligence} > \text{Passive Surveillance}$$
+Fill the bracketed figures from a live run:
 
----
-
-### Slide 2: Problem, Solution & Operational User Journey
-#### The Challenge in Warehouse Loading/Unloading:
-* Over 70% of material handling damages stem from operator behavioural violations (dragging, dropping, improper stacking, rough pitching, using packing straps as handles) rather than mechanical equipment failure.
-* Conventional CCTV only acts as a retrospective recording device ("Find out who broke the box after the customer complains").
-
-#### The VisionGuard Proactive Loop:
-```
-┌──────────────┐     ┌───────────────┐     ┌───────────────────────┐
-│ CAMERA FEED  │ ──> │ AI PERCEPTION │ ──> │ BEHAVIOUR REASONING   │
-└──────────────┘     └───────────────┘     └───────────────────────┘
-                                                       │
-┌──────────────┐     ┌───────────────┐     ┌───────────▼───────────┐
-│  PREVENTION  │ <── │ INTERVENTION  │ <── │      RISK ENGINE      │
-│  & COACHING  │     │   & ALERTS    │     │(Score 0-100 & Action) │
-└──────────────┘     └───────────────┘     └───────────────────────┘
+```bash
+python process_all_pilot_videos.py
+python -m tests.audit_accuracy
+python -m tests.audit_perception
+python -m pytest
 ```
 
-#### User Personas & Journey:
-1. **Warehouse Floor Operator**: Receives immediate visual guidance and coaching; avoids unsafe handling habits and physical strain.
-2. **Dock Supervisor**: Receives real-time prioritized alerts, reviews annotated evidence snapshots, and intervenes within seconds.
-3. **Logistics & Plant Manager**: Tracks shift-level discipline scores, identifies high-risk bays, and allocates targeted training.
+---
+
+## Slide 1 — Solution & Team
+
+**VisionGuard**
+*AI Video Intelligence for Warehouse Handling*
+
+**Team:** [team name] · [3–5 members with roles]
+
+**Value proposition (one line):**
+> Turns existing warehouse cameras into a field-intelligence assistant that understands handling
+> behaviour and flags damage risk while there is still time to intervene.
+
+Visual: dashboard hero screenshot with the KPI strip and an incident selected.
 
 ---
 
-### Slide 3: Technical Architecture & Technology Stack
+## Slide 2 — Problem, Solution & User Journey
+
+**The gap**
+
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                          PRESENTATION LAYER                            │
-│  React 18 + Vite Industrial Cockpit (Dark Mode, 60 FPS Seek & Replay)  │
-└──────────────────────────────────▲─────────────────────────────────────┘
-                                   │ REST API & WebSockets
-┌──────────────────────────────────▼─────────────────────────────────────┐
-│                          BACKEND SERVICES                              │
-│  FastAPI Asynchronous Gateway + Background Task Workers + SQLite DB    │
-│  Grounded AI Warehouse Assistant (Deterministic Database RAG)          │
-└──────────────────────────────────▲─────────────────────────────────────┘
-                                   │ Frames & Telemetry
-┌──────────────────────────────────▼─────────────────────────────────────┐
-│                       COMPUTER VISION & AI CORE                        │
-│  1. Object Detection: YOLOv8 (Operators, Cartons, Pallets, Trolleys)   │
-│  2. Persistent Tracking: ByteTrack + Velocity (vx, vy) + Trajectories   │
-│  3. 10 Modular Behaviour Detectors (Temporal State Machine Reasoning) │
-│  4. Transparent Multi-Factor Risk Engine (LOW, MED, HIGH, CRITICAL)    │
-│  5. Tactical HUD & Evidence Snapshot Generator                         │
-└────────────────────────────────────────────────────────────────────────┘
+Traditional CCTV:  Camera → Recording → Human review → Damage discovered → Corrective action
+VisionGuard:       Camera → AI perception → Behaviour understanding → Risk detection
+                          → Alert → Intervention → Prevention
 ```
 
-#### Technology Stack:
-* **Perception & Tracking**: PyTorch, Ultralytics YOLOv8, ByteTrack, OpenCV.
-* **Temporal Reasoning & Risk Engine**: Custom Python Kinematic State Engines, NumPy.
-* **Backend & Intelligence**: Python 3.11, FastAPI, Pydantic, SQLite with Connection Pooling.
-* **Grounded AI Assistant**: Strict RAG assistant grounded on SQLite warehouse incident records (zero hallucination).
-* **Frontend Dashboard**: React 18, Vite, Lucide Icons, Custom High-Performance Industrial CSS.
+**The supervisor's journey**
+
+1. Camera covers a loading bay; footage is ingested with its scene context (bay, shift, floor
+   condition, dock).
+2. AI detects operators and products, tracks them, and reasons over motion **sequences**.
+3. A risky handling sequence raises an alert with evidence, an explanation and a recommended action.
+4. Supervisor reviews the evidence frame and clip, and records the outcome — including whether
+   damage was actually found.
+5. Recurring behaviours become named coaching topics; the elevated-risk rate becomes the metric that
+   proves the coaching worked.
+
+Visual: the flow diagram plus the evidence inspector showing the temporal stage chain.
 
 ---
 
-### Slide 4: Prototype Capabilities & 10 Target Behaviours
-Validated across all **7 official Godrej pilot videos** (5,578 frames, 197 genuine incidents detected):
+## Slide 3 — Technical Architecture & Stack
 
-| # | Behaviour Scenario | Kinematic & Vision Trigger | Risk Level |
-|:---:|---|---|:---:|
-| 1 | **Product Dropping** | Freefall vertical acceleration ($v_y > 120\text{ px/s}$) + floor impact deceleration | `HIGH` |
-| 2 | **Product Dragging** | Floor translation without lifting equipment + operator adjacency | `MEDIUM` |
-| 3 | **Product Throwing / Pushing** | Release velocity ($> 140\text{ px/s}$) + detachment from operator | `CRITICAL` |
-| 4 | **Rolling Cartons / Mattresses** | Cyclical aspect ratio ($w/h$) inversion cycles during floor translation | `MEDIUM` |
-| 5 | **Improper Stacking / Inversion** | Heavy-on-light vertical stacking or upper width $> 1.25\times$ lower width | `HIGH` |
-| 6 | **Stepping on Cartons** | Operator foot/lower-body spatial intersection on carton top plane | `CRITICAL` |
-| 7 | **Using Straps to Pull** | Tensile pulling by packaging straps without base support | `HIGH` |
-| 8 | **Handling on Wet Floor** | Handling/sliding across moisture hazard dock threshold zones | `HIGH` |
-| 9 | **Vertical Product Kept Flat** | Upright goods (cupboards/appliances) placed horizontally ($w/h > 1.25$) | `MEDIUM` |
-| 10 | **Dock Level Hazard** | Loading/unloading threshold transition without leveller bridge plate | `HIGH` |
+```
+Video → Open-vocabulary detection → Persistent tracking → Temporal state machine
+      → 12 behaviour detectors → Transparent risk engine → Evidence + SQLite
+      → FastAPI → React dashboard + Grounded assistant
+```
 
----
+| Layer | Technology | Why |
+|---|---|---|
+| Computer vision | **YOLO-World** (open-vocabulary) | COCO has **no carton, pallet or trolley class** — this is what makes product-level reasoning possible |
+| Tracking | Custom IoU + proximity tracker | Persistent IDs, velocity in frame-heights/s (resolution-independent), motion state machine |
+| Action recognition | 12 temporal detectors | Consume state *transitions*, never single frames |
+| Risk | Transparent multi-factor engine | Every point attributable to a named factor |
+| LLM | Retrieval-grounded assistant (LLM optional) | Retrieval-first, so hallucination is structurally hard |
+| Video processing | OpenCV | Decode, overlays, evidence frames, replay clips |
+| Backend | FastAPI + SQLite (WAL) | Validated REST, background analysis, migrations |
+| Frontend | React + Vite | Overlay playback, timeline, evidence audit, analytics |
+| Edge/cloud | CPU-capable; frame striding + inference downscaling | Deployable on bay-side hardware |
 
-### Slide 5: Business Impact, Damage Prevention & Responsible AI
-#### 1. Quantifiable Operational Impact on Pilot Dataset:
-* **Total Videos Analyzed**: 7 / 7 Official Pilot Videos
-* **Detected Risky Events**: 197 genuine handling violations
-* **Proactive Interventions Enabled**: **163 High-Risk / Critical events** where supervisor intervention prevents product loss before shipment.
-* **Shift Handling Discipline Index**: 35.0% (identifying specific coaching needs).
-
-#### 2. User Validation Feedback:
-* **Dock Supervisor**: *"The instant jump-to-incident replay and evidence frame saves 20 minutes per shift when coaching handlers."*
-* **Quality & Safety Manager**: *"Clear separation between Potential Risk and Confirmed Damage eliminates false alarms."*
-
-#### 3. Responsible AI & Ethical Design:
-* **Non-Punitive Coaching**: Emphasizes ergonomic and procedural safety rather than individual surveillance.
-* **Explainability**: Every alert includes physical metrics ($v_y$, deceleration, aspect ratio), root cause, and prescriptive actions.
-* **Data Privacy**: Tracks anonymous Track IDs (`Carton #4`, `Operator #1`) without biometric profiling.
+Highlight the challenge's own formula and where each part lives:
+**Object detection + Object tracking + Action recognition + Temporal reasoning + Risk classification.**
 
 ---
 
-### Slide 6: The Bigger Opportunity — Enterprise Physical Operations
-VisionGuard's modular kinematic engine scales seamlessly beyond the loading dock:
-$$\text{Warehouse Dock} \longrightarrow \text{Assembly Plant} \longrightarrow \text{Distribution Center} \longrightarrow \text{Retail Staging} \longrightarrow \text{Field Delivery}$$
-* Edge-deployable on local Jetson / industrial mini-PCs for offline low-latency inference.
-* Integrable with Godrej Warehouse Management Systems (WMS) and ERP.
+## Slide 4 — Prototype & Demo
+
+Screenshots (four panels):
+
+1. **AI overlay** — track IDs, entity classes, motion states, velocity vectors.
+2. **Incident timeline + evidence inspector** — the temporal stage chain
+   `carried → falling → settled` with timestamps.
+3. **Risk score breakdown** — named factors with their point contributions, including a *negative*
+   factor for low detection confidence.
+4. **Detection Coverage tab** — the honest capability matrix, generated from the detector code.
+
+Demo video (3–5 scenarios): dragging at the dock, dock-transition hazard, handling without
+equipment, an assistant question, and a live ingest with scene context.
+
+Caption to include verbatim:
+> Every figure shown is produced by the pipeline from real footage. No detections, statistics or
+> demo data are seeded.
+
+---
+
+## Slide 5 — Impact, Damage Prevention & Responsible AI
+
+**The framing shift**
+
+> Not *"we detected 25 damaged products"* — that is a post-mortem.
+> Instead: **"we identified [N] high-risk handling events, each an opportunity to intervene before
+> damage occurred."**
+
+**Metrics the system produces**
+
+| Metric | Value |
+|---|---|
+| Footage analysed | [N] minutes across [N] clips |
+| Risk events detected | [N] |
+| Intervention opportunities (high + critical) | [N] |
+| Baseline elevated-risk rate | [N] per minute — the number to re-measure after coaching |
+| False positives eliminated vs first build | 372 → [N] events on identical footage |
+
+**Responsible AI, built into the data model**
+
+* `OBSERVED_BEHAVIOUR → POTENTIAL_RISK → CONFIRMED_DAMAGE` — the pipeline can emit only the first
+  two; confirmed damage requires a human review action.
+* Faces blurred by default; incidents keyed to anonymous track IDs; no identity stored.
+* Recommendations target the process, not the person — asserted by an automated test.
+* Low perception confidence *reduces* the risk score and is shown as a factor.
+
+**Users to validate with:** warehouse supervisor, loading/unloading operator, logistics manager,
+quality professional, safety professional. Record what each observed and what changed as a result.
+
+---
+
+## Slide 6 — Honest Status & Roadmap
+
+**Working today**
+
+* 12 behaviours defined; [N] implemented, [N] partial, 1 requiring zone configuration
+* Full temporal reasoning with auditable evidence chains
+* Transparent risk scoring; grounded assistant; human-review workflow
+* 84 automated tests, plus two measurement audits
+
+**Measured limits — stated, not hidden**
+
+* **Product detection recall is the binding constraint.** The pilot clips are phone recordings *of a
+  CCTV monitor* with application chrome and burnt-in captions; low-contrast cartons are frequently
+  not detected. Measured per clip by `audit_perception.py`. Behaviour logic is verified
+  independently by 35 synthetic-track tests.
+* **Wet-floor sensing is not automated.** A specular classifier was built and tested; it could not
+  separate wet from dry on this footage, so condition is a declared input rather than a fabricated
+  detection.
+* **Strap-pulling was removed**, not left in — the heuristic fired 59 times and zero of those were on
+  the clip that actually shows strap use. It needs pose estimation.
+
+**Next**
+
+1. Fine-tune the detector on a few hundred labelled frames from the target bays — the single highest
+   -leverage change.
+2. Second footage batch to convert the baseline rate into a measured improvement claim.
+3. Pose estimation for grip-level behaviours; multi-camera tracking; live RTSP ingest.
+
+Closing line:
+> We would rather show a prototype that knows exactly where its limits are than one that hides them.
