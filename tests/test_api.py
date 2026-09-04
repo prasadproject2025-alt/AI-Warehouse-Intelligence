@@ -296,3 +296,45 @@ def test_reset_also_clears_batch_history():
     seed_incident(id="i_r2", video_id="v_r2", batch_id="batch_r2")
     client.post("/api/reset", json={"delete_evidence": False})
     assert client.get("/api/batches").json()["batches"] == []
+
+
+def test_every_analytics_aggregate_respects_the_batch_scope():
+    """
+    Regression: top_behaviours was left unscoped while the totals were scoped,
+    so a session showing 7 incidents listed behaviours summing to 19.
+    Every aggregate must describe the same set of rows.
+    """
+    seed_video(video_id="v_in", batch_id="batch_in")
+    seed_video(video_id="v_out", batch_id="batch_out")
+    seed_incident(id="in1", video_id="v_in", batch_id="batch_in",
+                  behaviour_type="product_drag", risk_level="MEDIUM")
+    seed_incident(id="in2", video_id="v_in", batch_id="batch_in",
+                  behaviour_type="product_drag", risk_level="MEDIUM")
+    for n in range(5):
+        seed_incident(id=f"out{n}", video_id="v_out", batch_id="batch_out",
+                      behaviour_type="product_drop", risk_level="HIGH")
+
+    a = client.get("/api/analytics?batch_id=batch_in").json()
+    assert a["total_incidents"] == 2
+    assert sum(a["top_behaviours"].values()) == 2, "behaviours must match the scoped total"
+    assert sum(a["risk_breakdown"].values()) == 2
+    assert sum(b["total"] for b in a["by_bay"]) == 2
+    assert sum(b["total"] for b in a["by_shift"]) == 2
+    assert "product_drop" not in a["top_behaviours"], "leaked rows from another batch"
+
+
+def test_videos_list_can_be_scoped_to_a_session():
+    seed_video(video_id="v_s1", batch_id="batch_sess")
+    seed_video(video_id="v_s2", batch_id="batch_other")
+    res = client.get("/api/videos?batch_id=batch_sess").json()
+    assert res["count"] == 1
+    assert res["videos"][0]["id"] == "v_s1"
+
+
+def test_a_new_session_scope_starts_empty():
+    """A page refresh uses an unseen scope, which must show nothing."""
+    seed_video(video_id="v_hist", batch_id="batch_hist")
+    seed_incident(id="i_hist", video_id="v_hist", batch_id="batch_hist")
+    assert client.get("/api/videos?batch_id=batch_brandnew").json()["count"] == 0
+    a = client.get("/api/analytics?batch_id=batch_brandnew").json()
+    assert a["total_incidents"] == 0 and a["total_videos_analyzed"] == 0

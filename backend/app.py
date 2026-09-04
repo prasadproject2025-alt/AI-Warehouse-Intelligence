@@ -267,8 +267,11 @@ def capabilities():
 
 
 @app.get("/api/videos")
-def list_videos():
-    videos = DatabaseManager.get_all_videos()
+def list_videos(batch_id: Optional[str] = None):
+    """Analysed videos, optionally limited to one session or analysis run."""
+    if batch_id:
+        _validate_id(batch_id, "batch id")
+    videos = DatabaseManager.get_all_videos(batch_id=batch_id)
     for v in videos:
         incidents = DatabaseManager.get_incidents(video_id=v["id"], limit=1000)
         v["incident_count"] = len(incidents)
@@ -334,6 +337,7 @@ async def upload_video(
     floor_condition: str = Form("unknown"),
     dock_transfer: bool = Form(False),
     staging_zone: Optional[str] = Form(None),
+    batch_id: Optional[str] = Form(None),
 ):
     """
     Ingest a warehouse video and start background analysis.
@@ -425,8 +429,10 @@ async def upload_video(
         "incidents_count": 0,
         "stage": "queued",
     }
+    # The upload carries the caller's session scope so its results appear in
+    # the view that requested them, rather than only in the global history.
     background_tasks.add_task(
-        _safe_process, save_path, video_id, True, None, scene
+        _safe_process, save_path, video_id, True, None, scene, batch_id
     )
 
     logger.info("Accepted upload %s (%.1f MB) as %s", safe_name, written / 1e6, video_id)
@@ -440,10 +446,10 @@ async def upload_video(
     }
 
 
-def _safe_process(path, video_id, annotate, stride, scene) -> None:
+def _safe_process(path, video_id, annotate, stride, scene, batch_id=None) -> None:
     """Background entry point: never let an exception escape unlogged."""
     try:
-        processor.process_video(path, video_id, annotate, stride, scene)
+        processor.process_video(path, video_id, annotate, stride, scene, batch_id=batch_id)
     except Exception:  # noqa: BLE001
         logger.exception("Background analysis failed for %s", video_id)
 
@@ -478,7 +484,9 @@ def analyze_video(video_id: str, background_tasks: BackgroundTasks):
         "incidents_count": 0,
         "stage": "queued",
     }
-    background_tasks.add_task(_safe_process, video["filepath"], video_id, True, None, scene)
+    background_tasks.add_task(
+        _safe_process, video["filepath"], video_id, True, None, scene, video.get("batch_id")
+    )
     return {"status": "processing", "video_id": video_id}
 
 

@@ -141,9 +141,17 @@ class DatabaseManager:
             conn.commit()
 
     @staticmethod
-    def get_all_videos() -> List[Dict[str, Any]]:
+    def get_all_videos(batch_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with get_connection() as conn:
-            rows = conn.execute("SELECT * FROM videos ORDER BY processed_at DESC").fetchall()
+            if batch_id:
+                rows = conn.execute(
+                    "SELECT * FROM videos WHERE batch_id = ? ORDER BY processed_at DESC",
+                    (batch_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM videos ORDER BY processed_at DESC"
+                ).fetchall()
             return [dict(r) for r in rows]
 
     @staticmethod
@@ -335,8 +343,8 @@ class DatabaseManager:
             behaviour_counts = {
                 b[0]: b[1]
                 for b in conn.execute(
-                    "SELECT behaviour_type, COUNT(*) FROM incidents "
-                    "GROUP BY behaviour_type ORDER BY 2 DESC"
+                    f"SELECT behaviour_type, COUNT(*) FROM incidents{iw} "
+                    "GROUP BY behaviour_type ORDER BY 2 DESC", ip
                 ).fetchall()
             }
             by_bay = [

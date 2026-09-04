@@ -150,7 +150,13 @@ export default function App() {
   // batch keeps figures from an earlier experiment out of the current view.
   const [batches, setBatches] = useState([]);
   const [activeBatch, setActiveBatch] = useState(null);
-  const [scope, setScope] = useState('');          // '' = all stored analysis
+  // A fresh id each time the page loads, so a refresh starts from an empty
+  // view: the dashboard shows what you analyse in *this* session, not the
+  // whole stored history. Past runs stay selectable in the Dataset dropdown.
+  const [sessionId] = useState(
+    () => `batch_s${Math.random().toString(36).slice(2, 10)}`
+  );
+  const [scope, setScope] = useState(sessionId);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState('');
   // How many videos are in the library, so the button can say what it will run.
@@ -186,7 +192,7 @@ export default function App() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || "Reset failed");
-      setScope("");
+      setScope(`batch_s${Math.random().toString(36).slice(2, 10)}`);
       setSelectedVideo(null);
       setIncidents([]);
       setSelectedIncident(null);
@@ -246,7 +252,7 @@ export default function App() {
   const refreshVideos = useCallback(async (keepSelection = true) => {
     setVideosLoading(true);
     try {
-      const data = await apiGet('/api/videos');
+      const data = await apiGet(`/api/videos${scope ? `?batch_id=${encodeURIComponent(scope)}` : ''}`);
       setVideos(data.videos || []);
       setApiError(null);
       if (data.videos?.length) {
@@ -259,7 +265,7 @@ export default function App() {
       }
     } catch (err) { setApiError(err.message); }
     finally { setVideosLoading(false); }
-  }, [selectVideo, selectedVideo]);
+  }, [selectVideo, selectedVideo, scope]);
 
   // While a run is in flight, poll it and refresh the pages as results land.
   useEffect(() => {
@@ -427,6 +433,9 @@ export default function App() {
     const form = new FormData();
     form.append('file', file);
     Object.entries(sceneForm).forEach(([k, v]) => form.append(k, String(v)));
+    // Tag the upload with the current session so its results appear in this
+    // view rather than only in the global history.
+    form.append('batch_id', scope || sessionId);
     try {
       const res = await fetch('/api/videos/upload', { method: 'POST', body: form });
       const data = await res.json().catch(() => ({}));
@@ -535,6 +544,7 @@ export default function App() {
           <span className="dataset-label">Dataset</span>
           <select className="select" value={scope} disabled={!!activeBatch}
             onChange={e => setScope(e.target.value)}>
+            <option value={sessionId}>This session</option>
             <option value="">All stored analysis</option>
             {batches.map(b => (
               <option key={b.batch_id} value={b.batch_id}>
