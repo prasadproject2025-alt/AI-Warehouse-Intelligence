@@ -225,3 +225,31 @@ def test_bay_filter_applies_when_a_bay_number_is_named():
     seed_incident(id="i2", video_id="v2", bay="Dock 03")
     res = AIAssistant.answer_query("How many dragging events in dock 09?")
     assert res["filters"].get("bay") == "Dock 09"
+
+
+def test_site_wide_questions_ignore_video_scoping():
+    """
+    Regression: a bay-comparison answer drew on cross-video aggregates while
+    retrieval stayed scoped to the selected video, so the UI showed
+    "grounded in 0 events" beneath an answer covering every bay.
+    """
+    seed_video(video_id="v1", bay="Dock 09")
+    seed_video(video_id="v2", bay="Dock 03")
+    seed_incident(id="i1", video_id="v1", bay="Dock 09")
+    seed_incident(id="i2", video_id="v1", bay="Dock 09")
+    seed_incident(id="i3", video_id="v2", bay="Dock 03")
+
+    res = AIAssistant.answer_query(
+        "Which loading bay had the highest number of risky events?", video_id="v2"
+    )
+    assert res["relevant_count"] > 0, "site-wide answer must cite the rows it summarised"
+    assert "Dock 09" in res["response"]
+
+
+def test_event_specific_questions_still_respect_video_scoping():
+    seed_video(video_id="v1")
+    seed_video(video_id="v2")
+    seed_incident(id="i1", video_id="v1", behaviour_type="product_drag")
+    seed_incident(id="i2", video_id="v2", behaviour_type="product_drag")
+    res = AIAssistant.answer_query("Show me the dragging events", video_id="v1")
+    assert {i["id"] for i in res["relevant_incidents"]} == {"i1"}

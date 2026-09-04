@@ -65,6 +65,10 @@ class AIAssistant:
         "individual blame."
     )
 
+    #: Intents answered from cross-video aggregates rather than from the
+    #: currently selected video.
+    SITE_WIDE_INTENTS = {"location", "shift", "top_behaviours", "prevention", "overview"}
+
     # ------------------------------------------------------------------ entry
     @classmethod
     def answer_query(cls, query: str, video_id: Optional[str] = None) -> Dict[str, Any]:
@@ -74,8 +78,13 @@ class AIAssistant:
         intent = cls._classify_intent(ql)
         filters = cls._extract_filters(ql)
 
+        # Site-wide questions are answered from cross-video aggregates, so
+        # scoping retrieval to the currently selected video would report
+        # "grounded in 0 events" underneath an answer covering every bay.
+        scope_video = None if intent in cls.SITE_WIDE_INTENTS else video_id
+
         incidents = DatabaseManager.get_incidents(
-            video_id=video_id,
+            video_id=scope_video,
             risk_level=filters.get("risk_level"),
             behaviour_type=filters.get("behaviour_type"),
             bay=filters.get("bay"),

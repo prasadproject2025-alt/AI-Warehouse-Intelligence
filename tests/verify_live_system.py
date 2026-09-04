@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import quote
@@ -40,6 +41,20 @@ def check(label: str, condition: bool, detail: str = "") -> bool:
         _failed += 1
         print(f"  [FAIL] {label}" + (f" - {detail}" if detail else ""))
     return condition
+
+
+def wait_for_server(timeout_sec: int = 120) -> bool:
+    """The server loads model weights on start, so give it time to come up."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(BASE + "/api/health", timeout=5)
+            return True
+        except urllib.error.HTTPError:
+            return True  # responding, just not with 200
+        except Exception:
+            time.sleep(2)
+    return False
 
 
 def request(path, method="GET", data=None, headers=None, raw=False):
@@ -84,6 +99,9 @@ def main() -> int:
 
     # 1 -------------------------------------------------------------- health
     print("\n[1] Server health and detector backend")
+    if not wait_for_server():
+        print("  [FAIL] server did not respond within 120s - start it and retry")
+        return 1
     status, health = request("/api/health")
     if not check("server responds", status == 200, f"status {status}"):
         print("\nServer unreachable. Start it and retry.")
