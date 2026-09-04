@@ -155,3 +155,73 @@ def test_scoping_to_a_video_limits_retrieval():
     seed_incident(id="i2", video_id="v2")
     res = AIAssistant.answer_query("Show me all high-risk handling events", video_id="v1")
     assert {i["id"] for i in res["relevant_incidents"]} == {"i1"}
+
+
+# --------------------------------------- untracked subjects must be refused
+def test_refuses_to_count_a_behaviour_it_does_not_track():
+    """
+    Regression: 'how many forklift collision events' previously fell through to
+    the unfiltered total, implying the system had detected 13 forklift
+    collisions. It must say it does not track that instead.
+    """
+    seed_video()
+    for i in range(4):
+        seed_incident(id=f"inc_{i}", behaviour_type="product_drag")
+
+    res = AIAssistant.answer_query("How many forklift collision events were detected in Bay 99?")
+    assert res["relevant_count"] == 0
+    assert "does not detect" in res["response"]
+    assert "forklift collision" in res["response"]
+    assert "**4**" not in res["response"], "must not report an unrelated count"
+
+
+def test_lists_what_it_does_track_when_refusing():
+    seed_video()
+    seed_incident()
+    res = AIAssistant.answer_query("How many PPE violations were there?")
+    assert "does not detect" in res["response"]
+    assert "Product Drop" in res["response"] and "Product Drag" in res["response"]
+
+
+def test_generic_count_questions_still_return_the_total():
+    """'How many events in total' is a legitimate request for the overall count."""
+    seed_video()
+    for i in range(5):
+        seed_incident(id=f"inc_{i}")
+    for q in ["How many events were detected in total?", "How many incidents are there?"]:
+        res = AIAssistant.answer_query(q)
+        assert res["relevant_count"] == 5, q
+        assert "5" in res["response"]
+
+
+def test_known_behaviour_with_zero_rows_reports_zero_not_a_refusal():
+    seed_video()
+    seed_incident(behaviour_type="product_drag")
+    res = AIAssistant.answer_query("How many product drops were detected?")
+    assert "zero" in res["response"].lower()
+    assert "does not detect" not in res["response"]
+
+
+def test_bay_filter_only_triggers_on_a_real_bay_identifier():
+    """
+    Regression: 'which loading bay had the most events' matched the word after
+    'bay' and filtered on the non-existent bay "Bay Had", silently returning
+    zero rows for a question about every bay.
+    """
+    seed_video(bay="Dock 09")
+    seed_incident(id="i1", bay="Dock 09", risk_level="HIGH")
+    seed_incident(id="i2", bay="Dock 09", risk_level="CRITICAL")
+
+    res = AIAssistant.answer_query("Which loading bay had the highest number of risky events?")
+    assert res["filters"].get("bay") is None
+    assert res["relevant_count"] > 0
+    assert "Dock 09" in res["response"]
+
+
+def test_bay_filter_applies_when_a_bay_number_is_named():
+    seed_video(video_id="v1", bay="Dock 09")
+    seed_video(video_id="v2", bay="Dock 03")
+    seed_incident(id="i1", video_id="v1", bay="Dock 09")
+    seed_incident(id="i2", video_id="v2", bay="Dock 03")
+    res = AIAssistant.answer_query("How many dragging events in dock 09?")
+    assert res["filters"].get("bay") == "Dock 09"

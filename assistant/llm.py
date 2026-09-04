@@ -166,6 +166,15 @@ class AIAssistant:
                     best = (behaviour, len(term))
         if best:
             filters["behaviour_type"] = best[0]
+
+        # Only treat "bay"/"dock" as a filter when followed by an actual
+        # identifier containing a digit. Matching any following word turned
+        # "which loading bay had the most events" into a filter on "Bay Had",
+        # which silently excluded every row.
+        bay_m = re.search(r"\b(bay|dock)\s*#?\s*(\d[0-9a-z_-]*)", ql)
+        if bay_m:
+            filters["bay"] = f"{bay_m.group(1).title()} {bay_m.group(2)}"
+
         return filters
 
     # -------------------------------------------------------------- handlers
@@ -314,16 +323,74 @@ class AIAssistant:
             lines.append(f"_{len(rows) - 5} further event(s) in the timeline._")
         return "\n".join(lines), rows
 
+    #: Extracts the subject of a "how many X ..." question. The terminators are
+    #: word-bounded: without \b, "collision" would be cut at its inner "is".
+    _COUNT_SUBJECT_RE = re.compile(
+        r"how many\s+(.+?)"
+        r"(?:\s*\b(?:events?|incidents?|cases?|times?|were|was|are|is|did|do|have|has)\b|\s*\?|$)"
+    )
+
+    #: Phrasings that legitimately ask for the overall count rather than naming
+    #: a specific subject.
+    _GENERIC_SUBJECTS = {
+        "", "total", "in total", "handling", "risky", "risk", "risky handling",
+        "all", "detected", "of them", "there", "events", "incidents",
+    }
+
     @classmethod
-    def _answer_count(cls, ql, filters, incidents, summary):
+    def _unrecognised_subject(
+        cls, ql: str, behaviour: Optional[str], risk_level: Optional[str]
+    ) -> Optional[str]:
+        """
+        Return the named subject when it maps to no behaviour the system tracks.
+
+        Deliberately general rather than a blocklist: anything the user names
+        that did not resolve to one of the tracked behaviours is unrecognised.
+        """
+        if behaviour or risk_level:
+            return None
+        match = cls._COUNT_SUBJECT_RE.search(ql)
+        if not match:
+            return None
+        subject = match.group(1).strip(" ?.,")
+        if subject in cls._GENERIC_SUBJECTS or len(subject) < 3:
+            return None
+        return subject
+
+    @classmethod
+    def _not_tracked_answer(cls, subject: str, summary: Dict[str, Any]) -> str:
+        tracked = ", ".join(_pretty(b) for b in BEHAVIOUR_SYNONYMS)
+        return (
+            f"The system does not detect **{subject}**, so there is no evidence to answer "
+            f"this. Giving you a number from unrelated events would be misleading.\n\n"
+            f"**What it does detect:** {tracked}.\n\n"
+            f"{summary['total_incidents']} event(s) are recorded across those categories — "
+            f"ask about any of them and you will get the real figures."
+        )
+
+    @classmethod
+    def _answer_count(cls, ql, filters, incidents, summary):  # noqa: C901
         b = filters.get("behaviour_type")
         r = filters.get("risk_level")
+        bay = filters.get("bay")
         rows = incidents
         if b:
             rows = [i for i in rows if i["behaviour_type"] == b]
         if r:
             rows = [i for i in rows if i["risk_level"] == r]
-        label = " ".join(x for x in [r, _pretty(b) if b else None] if x) or "handling"
+        if bay:
+            rows = [i for i in rows if bay.lower() in (i.get("bay") or "").lower()]
+
+        # If the question names a subject that maps to no tracked behaviour,
+        # answering with the overall count would imply the system detected
+        # something it does not monitor at all. A keyword blocklist only catches
+        # the words someone happened to think of, so the check is general: any
+        # named subject that resolved to no behaviour filter is unrecognised.
+        unknown = cls._unrecognised_subject(ql, b, r)
+        if unknown:
+            return cls._not_tracked_answer(unknown, summary), []
+
+        label = " ".join(x for x in [r, _pretty(b) if b else None, f"in {bay}" if bay else None] if x) or "handling"
         if not rows:
             return (
                 f"Zero **{label}** events are recorded. "

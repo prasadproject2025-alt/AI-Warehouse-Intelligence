@@ -18,6 +18,7 @@ import re
 import shutil
 import uuid
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import (
     BackgroundTasks,
@@ -139,10 +140,16 @@ def _validate_id(value: str, label: str) -> str:
 
 
 def _static_url(path: Optional[str], mount: str) -> Optional[str]:
-    """Convert a stored filesystem path into its public static URL."""
+    """
+    Convert a stored filesystem path into its public static URL.
+
+    Only the basename is used, so a stored path can never escape its mount.
+    The name is percent-encoded because pilot filenames contain spaces and
+    commas, which are not valid in a raw URL path.
+    """
     if not path:
         return None
-    return f"/static/{mount}/{os.path.basename(path)}"
+    return f"/static/{mount}/{quote(os.path.basename(path))}"
 
 
 def _decorate_incident(inc: Dict[str, Any]) -> Dict[str, Any]:
@@ -152,7 +159,7 @@ def _decorate_incident(inc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _decorate_video(v: Dict[str, Any]) -> Dict[str, Any]:
-    v["video_url"] = _static_url(v.get("filepath"), "raw") or f"/static/raw/{v['filename']}"
+    v["video_url"] = _static_url(v.get("filepath") or v.get("filename"), "raw")
     v["annotated_video_url"] = _static_url(v.get("annotated_filepath"), "processed")
     raw = v.get("scene_flags")
     if isinstance(raw, str):

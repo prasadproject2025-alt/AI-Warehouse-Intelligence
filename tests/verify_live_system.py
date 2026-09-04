@@ -10,13 +10,20 @@ Start the server first:
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
+
+# Windows consoles default to cp1252, which cannot encode the report's
+# punctuation. Force UTF-8 so verification never fails on its own output.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):
+        pass
 
 BASE = os.environ.get("VISIONGUARD_URL", "http://127.0.0.1:8000")
 
@@ -28,14 +35,18 @@ def check(label: str, condition: bool, detail: str = "") -> bool:
     global _passed, _failed
     if condition:
         _passed += 1
-        print(f"  [PASS] {label}" + (f" — {detail}" if detail else ""))
+        print(f"  [PASS] {label}" + (f" - {detail}" if detail else ""))
     else:
         _failed += 1
-        print(f"  [FAIL] {label}" + (f" — {detail}" if detail else ""))
+        print(f"  [FAIL] {label}" + (f" - {detail}" if detail else ""))
     return condition
 
 
 def request(path, method="GET", data=None, headers=None, raw=False):
+    # The API returns percent-encoded static URLs, so only encode a path that
+    # still carries raw spaces (which urllib would otherwise reject outright).
+    if " " in path:
+        path = quote(path, safe="/?&=%")
     req = urllib.request.Request(BASE + path, method=method, data=data)
     for k, v in (headers or {}).items():
         req.add_header(k, v)
@@ -196,30 +207,30 @@ def main() -> int:
     # 10 --------------------------------------------------- validation paths
     print("\n[10] Invalid input and no-data handling")
     status, _ = request("/api/videos/vid_does_not_exist")
-    check("unknown video → 404", status == 404, f"status {status}")
+    check("unknown video -> 404", status == 404, f"status {status}")
     status, _ = request("/api/incidents/inc_does_not_exist")
-    check("unknown incident → 404", status == 404, f"status {status}")
+    check("unknown incident -> 404", status == 404, f"status {status}")
     status, _ = request("/api/incidents?risk_level=EXTREME")
-    check("invalid risk filter → 400", status == 400, f"status {status}")
+    check("invalid risk filter -> 400", status == 400, f"status {status}")
     status, _ = request("/api/incidents?limit=99999")
-    check("out-of-range limit → 400", status == 400, f"status {status}")
+    check("out-of-range limit -> 400", status == 400, f"status {status}")
 
     body, ctype = multipart({}, "malware.exe", b"MZ\x00\x00")
     status, _ = request("/api/videos/upload", "POST", body, {"Content-Type": ctype})
-    check("non-video upload → 415", status == 415, f"status {status}")
+    check("non-video upload -> 415", status == 415, f"status {status}")
 
     body, ctype = multipart({}, "empty.mp4", b"")
     status, _ = request("/api/videos/upload", "POST", body, {"Content-Type": ctype})
-    check("empty upload → 400", status == 400, f"status {status}")
+    check("empty upload -> 400", status == 400, f"status {status}")
 
     body, ctype = multipart({"floor_condition": "damp"}, "clip.mp4", b"\x00" * 256)
     status, _ = request("/api/videos/upload", "POST", body, {"Content-Type": ctype})
-    check("invalid scene context → 400", status == 400, f"status {status}")
+    check("invalid scene context -> 400", status == 400, f"status {status}")
 
     payload = json.dumps({"query": "   "}).encode()
     status, _ = request("/api/assistant/chat", "POST", payload,
                         {"Content-Type": "application/json"})
-    check("blank assistant query → 422", status == 422, f"status {status}")
+    check("blank assistant query -> 422", status == 422, f"status {status}")
 
     status, _ = request("/api/videos/vid_nope/status")
     check("status of unknown video handled", status == 200)
