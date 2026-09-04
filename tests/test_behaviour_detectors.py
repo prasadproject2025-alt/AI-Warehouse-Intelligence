@@ -169,8 +169,11 @@ def test_stepping_fires_when_operator_is_elevated_at_their_own_depth():
     ctx = base_context(ground_plane=_ground_plane())
 
     det = SteppingDetector()
-    det.process([op, prod], 6, 0.0, ctx)          # start the dwell timer
-    events = det.process([op, prod], 12, 1.2, ctx)  # after the dwell window
+    # Confirmation needs MIN_OBSERVATIONS independent sightings, not just a
+    # start and an end, so a single-frame coincidence cannot raise an incident.
+    det.process([op, prod], 6, 0.0, ctx)
+    det.process([op, prod], 9, 0.3, ctx)
+    events = det.process([op, prod], 12, 0.6, ctx)
     assert len(events) == 1
     assert events[0].behaviour_type is BehaviourType.STEPPING_ON_CARTON
 
@@ -288,3 +291,83 @@ def test_designated_area_fires_outside_a_configured_zone():
     det.process([trk], 1, 0.0, ctx)
     events = det.process([trk], 60, 6.0, ctx)
     assert len(events) == 1
+
+
+# ------------------- detection dropout must not reset contact timers --------
+def test_stepping_survives_intermittent_product_detection():
+    """
+    Regression: the contact timer was deleted whenever a pair was missing from
+    a single frame. With ~59% product detection on the pilot footage the 0.6 s
+    dwell could never accumulate, so a clip that clearly shows an operator
+    standing on a carton produced no event at all.
+    """
+    op = build_track([(600, 720 * 0.70 - 162)] * 6, entity=WarehouseEntity.OPERATOR,
+                     size=(90.0, 324.0), fps=FPS, track_id=3)
+    prod = build_track([(600, 720 * 0.76)] * 6, size=(200.0, 90.0), fps=FPS, track_id=7)
+    ctx = base_context(ground_plane=_ground_plane())
+
+    det = SteppingDetector()
+    det.process([op, prod], 6, 0.0, ctx)        # contact starts
+    det.process([op, prod], 9, 0.2, ctx)
+    det.process([op], 12, 0.4, ctx)             # product detection drops out
+    events = det.process([op, prod], 15, 0.7, ctx)  # reappears, still one contact
+    assert len(events) == 1, "a one-frame dropout must not reset the dwell timer"
+
+
+def test_stepping_contact_expires_after_a_real_absence():
+    """The grace window must not let an operator who genuinely stepped off
+    accumulate dwell across separate visits."""
+    op = build_track([(600, 720 * 0.70 - 162)] * 6, entity=WarehouseEntity.OPERATOR,
+                     size=(90.0, 324.0), fps=FPS, track_id=3)
+    prod = build_track([(600, 720 * 0.76)] * 6, size=(200.0, 90.0), fps=FPS, track_id=7)
+    ctx = base_context(ground_plane=_ground_plane())
+
+    det = SteppingDetector()
+    det.process([op, prod], 6, 0.0, ctx)
+    det.process([op], 30, 3.0, ctx)             # absent far longer than the grace
+    # Contact restarts here, so 0.2 s later the dwell is not yet satisfied.
+    det.process([op, prod], 36, 3.2, ctx)
+    assert det.process([op, prod], 39, 3.4, ctx) == []
+
+
+def test_stacking_survives_intermittent_detection():
+    """Same dropout flaw affected the 1.5 s stacking stability requirement."""
+    top = build_track([(600, 400)] * 6, size=(260.0, 90.0), fps=FPS, track_id=1)
+    bot = build_track([(600, 490)] * 6, size=(180.0, 90.0), fps=FPS, track_id=2)
+    ctx = base_context()
+
+    det = StackingDetector()
+    det.process([top, bot], 3, 0.0, ctx)
+    det.process([top], 6, 0.3, ctx)             # bottom package drops out
+    events = det.process([top, bot], 12, 1.8, ctx)
+    assert len(events) == 1, "a dropout must not reset the stacking stability timer"
+
+
+def test_stepping_requires_more_than_a_single_frame_coincidence():
+    """The observation count is what rejects a one-frame overlap."""
+    op = build_track([(600, 720 * 0.70 - 162)] * 6, entity=WarehouseEntity.OPERATOR,
+                     size=(90.0, 324.0), fps=FPS, track_id=3)
+    prod = build_track([(600, 720 * 0.76)] * 6, size=(200.0, 90.0), fps=FPS, track_id=7)
+    ctx = base_context(ground_plane=_ground_plane())
+
+    det = SteppingDetector()
+    assert det.process([op, prod], 6, 0.0, ctx) == []
+    assert det.process([op, prod], 9, 0.3, ctx) == []   # still below MIN_OBSERVATIONS
+
+
+def test_stepping_is_silent_when_the_ground_plane_fit_is_too_noisy():
+    """
+    A very noisy fit makes the required elevation exceed what stepping on a
+    package can physically produce. The detector must say it cannot judge
+    rather than appearing active while being unable to fire.
+    """
+    op = build_track([(600, 720 * 0.70 - 162)] * 6, entity=WarehouseEntity.OPERATOR,
+                     size=(90.0, 324.0), fps=FPS, track_id=3)
+    prod = build_track([(600, 720 * 0.76)] * 6, size=(200.0, 90.0), fps=FPS, track_id=7)
+    ctx = base_context(ground_plane=_ground_plane())
+    ctx["ground_plane_residual"] = 0.09   # 2.5 * 0.09 = 0.225 > MAX_ELEVATION
+
+    det = SteppingDetector()
+    assert det.process([op, prod], 6, 0.0, ctx) == []
+    assert det.unable_to_judge is not None
+    assert "too noisy" in det.unable_to_judge

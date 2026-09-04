@@ -273,8 +273,27 @@ class PersistentTracker:
         feet = np.array([f for f, _ in self._foot_samples], dtype=float)
         if float(heights.max() - heights.min()) < 0.05:
             return None  # everyone at the same depth: no usable gradient
+
+        # Robust (trimmed) fit rather than plain least squares.
+        #
+        # The samples that matter most are contaminated by definition: an
+        # operator standing on a package is an outlier *above* the floor, and
+        # ordinary least squares lets those points pull the line upward and
+        # inflate the residual. Since the elevation threshold is a multiple of
+        # that residual, self-contamination raised the bar until stepping could
+        # never be detected. Refitting on the best-fitting 70% of samples keeps
+        # the model anchored to operators who really are on the floor.
         slope, intercept = np.polyfit(heights, feet, 1)
-        self._floor_fit_residual = float(np.std(feet - (slope * heights + intercept)))
+        for _ in range(3):
+            resid = np.abs(feet - (slope * heights + intercept))
+            keep = resid <= np.quantile(resid, 0.70)
+            if int(keep.sum()) < 12 or float(heights[keep].max() - heights[keep].min()) < 0.05:
+                break
+            slope, intercept = np.polyfit(heights[keep], feet[keep], 1)
+
+        inliers = np.abs(feet - (slope * heights + intercept))
+        inlier_mask = inliers <= np.quantile(inliers, 0.70)
+        self._floor_fit_residual = float(np.std(inliers[inlier_mask])) if inlier_mask.any() else 0.05
         return float(slope * person_height_norm + intercept)
 
     @property

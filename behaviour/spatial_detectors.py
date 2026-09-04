@@ -60,12 +60,16 @@ class StackingDetector(BaseBehaviourDetector):
         "a small dense package on a large light one is not distinguishable from video."
     )
 
+    #: How long the pair may go unobserved before the stack is treated as gone.
+    PAIR_GRACE = 0.7  # seconds
+
     OVERHANG_RATIO = 1.25
     MIN_STABLE_SEC = 1.5
 
     def __init__(self, cooldown_sec: float = 6.0) -> None:
         super().__init__(cooldown_sec)
         self._pair_since: Dict[Tuple[int, int], float] = {}
+        self._pair_last_seen: Dict[Tuple[int, int], float] = {}
 
     def process(
         self,
@@ -155,9 +159,16 @@ class StackingDetector(BaseBehaviourDetector):
                     )
                 )
 
+        # As in SteppingDetector: a stack does not dismantle itself because one
+        # frame missed a detection. Without a grace window the 1.5 s stability
+        # requirement was reset by every dropout and could never be reached.
+        for key in seen_pairs:
+            self._pair_last_seen[key] = timestamp
         for key in list(self._pair_since):
-            if key not in seen_pairs:
-                del self._pair_since[key]
+            last = self._pair_last_seen.get(key, timestamp)
+            if timestamp - last > self.PAIR_GRACE:
+                self._pair_since.pop(key, None)
+                self._pair_last_seen.pop(key, None)
         return events
 
 
@@ -189,11 +200,28 @@ class SteppingDetector(BaseBehaviourDetector):
     #: Elevation must exceed this multiple of the ground-plane fit residual.
     ELEVATION_SIGMA = 2.5
     MIN_ELEVATION = 0.045  # absolute floor, in frame-heights
-    MIN_DWELL = 0.6        # seconds
+    #: Elapsed-time floor. Kept small because sparse sampling, not duration,
+    #: is the limiting factor; MIN_OBSERVATIONS carries the confirmation.
+    MIN_DWELL = 0.15       # seconds
+    #: Independent frames that must confirm the contact before it is reported.
+    MIN_OBSERVATIONS = 3
+    #: How long a contact may go unobserved before it is treated as ended.
+    #: Sized above the detector's typical dropout so a genuine stand is not
+    #: chopped into fragments, but well below a realistic step-off-and-return.
+    CONTACT_GRACE = 0.7    # seconds
+    #: Largest elevation a package step can plausibly produce, in frame-heights.
+    #: If the adaptive threshold exceeds this the ground-plane fit is unusable.
+    MAX_ELEVATION = 0.16
 
     def __init__(self, cooldown_sec: float = 6.0) -> None:
         super().__init__(cooldown_sec)
-        self._contact_since: Dict[Tuple[int, int], float] = {}
+        # Keyed by product track id; see the note at the dwell timer.
+        #: Set when the ground-plane fit is too noisy to make a determination.
+        self.unable_to_judge: Optional[str] = None
+        self._contact_since: Dict[int, float] = {}
+        self._contact_hits: Dict[int, int] = {}
+        self._contact_frame: Dict[int, int] = {}
+        self._contact_last_seen: Dict[int, float] = {}
 
     def process(
         self,
@@ -210,6 +238,18 @@ class SteppingDetector(BaseBehaviourDetector):
             return events
         residual = ctx.get("ground_plane_residual", 0.05)
         threshold = max(self.MIN_ELEVATION, self.ELEVATION_SIGMA * residual)
+        if threshold > self.MAX_ELEVATION:
+            # The fit is too noisy to judge. Standing on a package raises an
+            # operator by well under this much, so demanding more would mean the
+            # detector could never fire while still appearing active. Report the
+            # limitation instead of failing silently.
+            self.unable_to_judge = (
+                f"ground-plane fit too noisy (residual {residual:.3f} requires "
+                f"{threshold:.3f} elevation, above the {self.MAX_ELEVATION:.3f} "
+                f"a package step can physically produce)"
+            )
+            return events
+        self.unable_to_judge = None
 
         operators = [t for t in tracks if t.entity_type is WarehouseEntity.OPERATOR and t.hits >= 4]
         products = [t for t in tracks if t.is_product and t.hits >= 4]
@@ -234,10 +274,35 @@ class SteppingDetector(BaseBehaviourDetector):
                 if abs(op.box[3] - prod.box[1]) > 0.10 * op.frame_height:
                     continue
 
-                key = (op.track_id, prod.track_id)
+                # Keyed on the package, not the (operator, package) pair.
+                # The question this timer answers is "how long has this package
+                # been stood on", and operator identity is not stable enough to
+                # answer it: on the pilot footage a single 0.8 s step was split
+                # across two operator track ids into 0.2 s and 0.4 s fragments,
+                # neither of which met the dwell requirement. The per-operator
+                # elevation test above still runs every frame, so this does not
+                # weaken the false-positive guard.
+                key = prod.track_id
                 seen.add(key)
                 since = self._contact_since.setdefault(key, timestamp)
                 dwell = timestamp - since
+                # Count distinct frames, not operator/package pairings: two
+                # operators near the same package must not satisfy the
+                # confirmation requirement inside a single frame.
+                if self._contact_frame.get(key) != frame_idx:
+                    self._contact_frame[key] = frame_idx
+                    self._contact_hits[key] = self._contact_hits.get(key, 0) + 1
+
+                # Confirmation is by count of independent observations, not by
+                # elapsed time alone. A step onto a package is brief and the
+                # product is only detected in ~59% of frames, so a 0.6 s wall
+                # clock requirement was unreachable even when the operator was
+                # plainly elevated. Requiring several confirming observations
+                # rejects single-frame coincidence, which is what the dwell
+                # gate was actually for, while the depth-aware elevation test
+                # above carries the real false-positive burden.
+                if self._contact_hits[key] < self.MIN_OBSERVATIONS:
+                    continue
                 if dwell < self.MIN_DWELL or not self._cooled_down(key, timestamp):
                     continue
 
@@ -287,9 +352,21 @@ class SteppingDetector(BaseBehaviourDetector):
                     )
                 )
 
+        # Detection dropout is not the same as the operator stepping off.
+        # Forgetting the contact the instant a pair is missing reset the dwell
+        # timer on every dropped frame, so with intermittent product detection
+        # the dwell requirement could never be satisfied. Contact is retained
+        # across short gaps and only discarded once the pair has genuinely been
+        # absent for longer than the grace window.
+        for key in seen:
+            self._contact_last_seen[key] = timestamp
         for key in list(self._contact_since):
-            if key not in seen:
-                del self._contact_since[key]
+            last = self._contact_last_seen.get(key, timestamp)
+            if timestamp - last > self.CONTACT_GRACE:
+                self._contact_since.pop(key, None)
+                self._contact_last_seen.pop(key, None)
+                self._contact_hits.pop(key, None)
+                self._contact_frame.pop(key, None)
         return events
 
 

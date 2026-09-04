@@ -30,6 +30,7 @@ from backend.database.db import DatabaseManager
 from behaviour.behaviour_engine import BehaviourEngine, SceneContext
 from detection.detector import WarehouseDetector
 from detection.tracker import PersistentTracker
+from video.encoder import BrowserVideoWriter
 from video.evidence import (
     create_evidence_snapshot,
     draw_hud_overlay,
@@ -156,12 +157,18 @@ class VideoProcessor:
         if generate_annotated_video:
             safe_stem = os.path.splitext(filename)[0].replace(" ", "_")[:60]
             annotated_path = os.path.join(self.output_dir, f"annotated_{video_id}_{safe_stem}.mp4")
-            writer = cv2.VideoWriter(
-                annotated_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
-            )
+            # H.264 via ffmpeg: OpenCV's mp4v output is MPEG-4 Part 2, which
+            # browsers refuse to decode, so the overlay rendered as a black
+            # <video> in the dashboard.
+            writer = BrowserVideoWriter(annotated_path, fps, width, height)
             if not writer.isOpened():
                 logger.warning("Could not open video writer; continuing without annotated output")
                 writer, annotated_path = None, None
+            elif not writer.browser_playable:
+                logger.warning(
+                    "ffmpeg unavailable - annotated video will not play in the dashboard. "
+                    "Install it with: pip install imageio-ffmpeg"
+                )
 
         frame_idx = 0
         analysed = 0

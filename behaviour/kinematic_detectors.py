@@ -218,11 +218,17 @@ class ThrowDetector(BaseBehaviourDetector):
     """
 
     behaviour_type = BehaviourType.PRODUCT_THROW
-    status = ImplementationStatus.IMPLEMENTED
+    status = ImplementationStatus.PARTIAL
     requirements = "Product must remain tracked from release to landing."
     limitations = (
-        "Fast, low-contrast throws can break the track mid-flight; those are missed "
-        "rather than reported."
+        "Not separable on the current pilot footage. Peak product speed was measured "
+        "across all seven clips: the throwing clips peak at 0.40 frame-heights/s (and "
+        "one has no product track at all), while clips containing no throw reach 0.52 "
+        "and 1.55. The distributions overlap, so no release-speed threshold divides "
+        "them - lowering it would add false positives without recovering the true ones. "
+        "The cause is upstream: the track breaks during the fast phase of a throw, so "
+        "the release is never observed. Needs a detector that holds the product through "
+        "rapid motion."
     )
 
     RELEASE_SPEED = 0.70
@@ -434,9 +440,13 @@ class RollDetector(BaseBehaviourDetector):
     status = ImplementationStatus.PARTIAL
     requirements = "Product tracked continuously through at least two full inversions."
     limitations = (
-        "Aspect-ratio inversion is a proxy for rotation. Axis-symmetric items "
-        "(rolled mattresses, drums) rotate without changing aspect ratio and are "
-        "under-detected; a rotated-box or segmentation model would be needed."
+        "Aspect-ratio inversion is a proxy for rotation, and on the pilot footage it "
+        "produced zero inversions across every clip, including both rolling clips - so "
+        "this detector currently recovers nothing. Two reasons: axis-symmetric items "
+        "(rolled mattresses, drums) rotate without changing their aspect ratio at all, "
+        "and an axis-aligned bounding box around a tumbling carton changes far less "
+        "than the carton itself does. A rotated-box or segmentation model is required; "
+        "no threshold on this proxy can fix it."
     )
 
     MIN_CYCLES = 2

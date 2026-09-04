@@ -17,6 +17,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import cv2
+from video.encoder import BrowserVideoWriter
 import numpy as np
 
 import config
@@ -228,7 +229,9 @@ def write_incident_clip(
             return None
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+        # Replay clips are played back in the dashboard, so they must be H.264;
+        # OpenCV's mp4v output renders as a black <video> in every browser.
+        writer = BrowserVideoWriter(out_path, fps, w, h)
         if not writer.isOpened():
             return None
         try:
