@@ -188,9 +188,9 @@ Upload the spare clip. Let the progress bar run.
 **"Why do some clips show no events?"**
 > Product detection is the binding constraint. These clips are phone recordings of a CCTV monitor,
 > including the application chrome, with captions burnt over the action. Low-contrast cartons on
-> wooden pallets are frequently not detected. Run `python -m tests.audit_perception` — we measured
+> wooden pallets are frequently not detected. Run `python tests/audit_perception.py` — we measured
 > the product detection rate per clip rather than guessing. Behaviour logic is verified independently
-> by 35 synthetic-track tests.
+> by 40 synthetic-track tests.
 
 **"How do I know the risk scores are not arbitrary?"**
 > Open any incident: the score is the sum of named factors, each shown with its point contribution

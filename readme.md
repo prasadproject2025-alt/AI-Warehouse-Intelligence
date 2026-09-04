@@ -258,34 +258,70 @@ left in as a decorative capability.** Reinstating it needs a pose model plus lab
 Run the audits yourself:
 
 ```bash
-python -m tests.audit_perception
+python tests/audit_perception.py
 ```
 
 ```bash
-python -m tests.audit_accuracy
+python tests/audit_accuracy.py
 ```
 
+### Measured perception coverage (30 frames sampled per clip)
+
+| Clip | Frames with operator | Frames with product | Mean product conf |
+|---|---|---|---|
+| Rolling and dropping carton | 100 % | **83 %** | 0.41 |
+| KD packets dragged, heavy box on other packets | 97 % | **80 %** | 0.39 |
+| Dock level, dragging cupboard | 93 % | **47 %** | 0.34 |
+| Throwing seating cartons, using strap | 100 % | **27 %** | 0.23 |
+| Stepping on cartons, vertical kept horizontal | 100 % | **20 %** | 0.16 |
+| Rolling and dragging on wet floor | 97 % | **7 %** | 0.15 |
+| Throwing Mattresses | 97 % | **0 %** | 0.00 |
+| **Mean** | **97 %** | **39 %** | 0.25 |
+
 **Perception is the binding constraint, and it is measured.** Operator detection is reliable across
-all clips. Product detection is not: the pilot videos are phone recordings *of a CCTV monitor*,
-including the NVMS application chrome, at low effective resolution, with editorial captions and
-arrows burnt over the action. Low-contrast tan cartons on wooden pallets are frequently not detected
-at any confidence threshold or inference resolution (both were tested — see `audit_perception.py`).
+every clip (97 %). Product detection is not: the pilot videos are phone recordings *of a CCTV
+monitor*, including the NVMS application chrome, at low effective resolution, with editorial
+captions and arrows burnt over the action. Low-contrast tan cartons on wooden pallets and
+plastic-wrapped mattresses are frequently not detected at any confidence threshold or inference
+resolution — both were tested (0.03–0.25 confidence; 640/960/1280 px) and neither changed the
+outcome.
 
 The consequence is stated plainly: **behaviour recall is limited by product detection, not by the
-behaviour logic.** A dropped carton that was never detected cannot produce a drop event. The
-behaviour reasoning itself is verified independently of the detector by 35 synthetic-track tests.
+behaviour logic.** The three clips with 0–20 % product detection are exactly the three that yielded
+no events. A dropped carton that was never detected cannot produce a drop event. The behaviour
+reasoning itself is verified independently of the detector by 40 synthetic-track tests.
 
-Closing this gap requires a detector fine-tuned on warehouse packaging (a few hundred labelled
-frames from the target bays would be sufficient) — it is a data problem, not a threshold problem.
+### Ground-truth result on the pilot set
+
+| Metric | Value |
+|---|---|
+| Ground-truth behaviours across the 7 clips | 14 |
+| Detected | 3 |
+| **Behaviour-level recall** | **21.4 %** |
+| Events recorded in total | 13 across 3.1 minutes of footage |
+| Behaviours observed | `product_drag` ×8, `unsupported_handling` ×3, `dock_level_hazard` ×2 |
+
+Correctly matched: dragging and the dock-transition hazard on *Dock level, dragging cupboard*, and
+dragging on *KD packets dragged*. Closing the remaining gap requires a detector fine-tuned on
+warehouse packaging (a few hundred labelled frames from the target bays would be sufficient) — a
+data problem, not a threshold problem.
 
 ### False-positive reduction achieved
 
+Identical footage, identical ground truth:
+
 | | Before | After |
 |---|---|---|
-| Incidents across the 7 pilot clips | 372 | see `audit_accuracy` output |
-| `stepping_on_carton` (rated CRITICAL) | 114 | eliminated as a systemic false positive |
+| Incidents across the 7 pilot clips | **372** | **13** |
+| Rated CRITICAL | 214 | 0 |
+| `stepping_on_carton` (all rated CRITICAL) | 114 | 0 — eliminated as a systemic false positive |
 | `strap_pulling` | 59 | removed — not reliably detectable |
-| Root cause of the bulk | every unknown COCO class mapped to "carton"; a fixed floor line flagged every *distant* worker as standing on a package | strict taxonomy; depth-aware ground plane fitted from operator stature |
+| `product_throw` | 90 | 0 — the previous events were detector noise |
+| Root cause of the bulk | every unknown COCO class mapped to "carton"; a fixed floor line flagged every *distant* worker as standing on a package | strict taxonomy with no fallback; depth-aware ground plane fitted from operator stature |
+
+The earlier build reported 372 events on this footage and 306 of them as HIGH or CRITICAL. Almost
+none were real: it detected kites, umbrellas and skis as cartons, and flagged background workers as
+standing on packages. Both root causes are fixed and covered by regression tests.
 
 ---
 
@@ -344,7 +380,7 @@ Interactive docs at `/docs`.
 python -m pytest
 ```
 
-84 tests covering the risk engine (determinism, factor attribution, thresholds, bounds, no confirmed
+110 tests covering the risk engine (determinism, factor attribution, thresholds, bounds, no confirmed
 damage, no punitive language), behaviour detectors (positive chains **and** the negative cases that
 previously produced false incidents), tracker kinematics and the ground-plane fit, database
 operations and migrations, all API endpoints including validation and error paths, assistant routing

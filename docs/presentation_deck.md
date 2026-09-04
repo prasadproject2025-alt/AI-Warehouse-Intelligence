@@ -6,8 +6,8 @@ Fill the bracketed figures from a live run:
 
 ```bash
 python process_all_pilot_videos.py
-python -m tests.audit_accuracy
-python -m tests.audit_perception
+python tests/audit_accuracy.py
+python tests/audit_perception.py
 python -m pytest
 ```
 
@@ -136,14 +136,14 @@ quality professional, safety professional. Record what each observed and what ch
 * 12 behaviours defined; [N] implemented, [N] partial, 1 requiring zone configuration
 * Full temporal reasoning with auditable evidence chains
 * Transparent risk scoring; grounded assistant; human-review workflow
-* 84 automated tests, plus two measurement audits
+* 110 automated tests, plus two measurement audits
 
 **Measured limits — stated, not hidden**
 
 * **Product detection recall is the binding constraint.** The pilot clips are phone recordings *of a
   CCTV monitor* with application chrome and burnt-in captions; low-contrast cartons are frequently
   not detected. Measured per clip by `audit_perception.py`. Behaviour logic is verified
-  independently by 35 synthetic-track tests.
+  independently by 40 synthetic-track tests.
 * **Wet-floor sensing is not automated.** A specular classifier was built and tested; it could not
   separate wet from dry on this footage, so condition is a declared input rather than a fabricated
   detection.

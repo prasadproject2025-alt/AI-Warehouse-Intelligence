@@ -55,3 +55,6 @@ data/visionguard.db
 data/visionguard.db-wal
 data/visionguard.db-shm
 data/raw/*.mp4
+
+# Test cache
+.pytest_cache/

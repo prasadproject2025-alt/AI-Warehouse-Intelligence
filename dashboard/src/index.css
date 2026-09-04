@@ -1,54 +1,102 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/*
+ * VisionGuard - design tokens.
+ *
+ * The visual language follows the Godrej Enterprises Group corporate style:
+ * white and warm-neutral surfaces, a single deep plum accent used sparingly,
+ * hairline rules instead of shadows, and generous whitespace. Palette values
+ * are taken from the GEG corporate site (plum #810055, tint #F9F2F6,
+ * bone #F1F1ED, body grey #707070).
+ *
+ * Jost stands in for Godrej's proprietary "gb-" geometric sans.
+ * Component styling lives in App.css.
+ */
 
-/* Design tokens and base reset. All component styling lives in App.css. */
+@import url('https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg-main: #0a0d13;
-  --bg-card: #121721;
-  --bg-card-hover: #171e2b;
-  --bg-surface: #1a2232;
-  --border-color: #242f44;
+  /* Brand */
+  --plum: #810055;
+  --plum-deep: #5e003e;
+  --plum-tint: #f9f2f6;
+  --plum-line: #e6d3df;
 
-  --text-main: #f0f6fc;
-  --text-muted: #9aa5b3;
-  --text-dim: #6b7484;
+  /* Surfaces */
+  --page: #ffffff;
+  --surface: #ffffff;
+  --surface-alt: #faf9f7;
+  --bone: #f1f1ed;
 
-  --risk-critical: #f85149;
-  --risk-critical-bg: rgba(248, 81, 73, 0.15);
-  --risk-high: #ff8a5b;
-  --risk-high-bg: rgba(255, 138, 91, 0.15);
-  --risk-med: #d29922;
-  --risk-med-bg: rgba(210, 153, 34, 0.15);
-  --risk-low: #3fb950;
-  --risk-low-bg: rgba(63, 185, 80, 0.15);
+  /* Rules and ink */
+  --rule: #e2e2dd;
+  --rule-strong: #c9c9c2;
+  --ink: #1a1a1a;
+  --ink-2: #333333;
+  --grey: #707070;
+  --grey-light: #949494;
 
-  --accent-cyan: #38bdf8;
-  --accent-blue: #2f6fed;
+  /*
+   * Risk colours are deliberately muted editorial tones rather than saturated
+   * signal colours, so the dashboard reads as a corporate report. Each keeps a
+   * contrast ratio above 4.5:1 on its tint.
+   */
+  --risk-critical: #a4161a;
+  --risk-critical-bg: #fbeceb;
+  --risk-high: #b4530a;
+  --risk-high-bg: #fdf1e7;
+  --risk-med: #7a5b00;
+  --risk-med-bg: #fbf5e3;
+  --risk-low: #2f6b45;
+  --risk-low-bg: #edf5f0;
 
-  color-scheme: dark;
+  --ok: #2f6b45;
+  --alert: #a4161a;
+
+  --font-display: 'Jost', 'Century Gothic', 'Futura', -apple-system, sans-serif;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  --maxw: 1440px;
+
+  color-scheme: light;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  background-color: var(--bg-main);
-  color: var(--text-main);
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--page);
+  color: var(--ink-2);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-  line-height: 1.5;
   overflow-x: hidden;
 }
 
-button, input, select, textarea { font-family: inherit; }
-button { font-size: inherit; }
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  color: var(--ink);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
 
-code, pre, .mono { font-family: 'JetBrains Mono', monospace; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 
-img, video { max-width: 100%; }
+code, pre, .mono {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
 
-::-webkit-scrollbar { width: 7px; height: 7px; }
-::-webkit-scrollbar-track { background: var(--bg-main); }
-::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+img, video { max-width: 100%; display: block; }
 
-:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+a { color: var(--plum); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--surface-alt); }
+::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: var(--grey-light); }
+
+:focus-visible { outline: 2px solid var(--plum); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
