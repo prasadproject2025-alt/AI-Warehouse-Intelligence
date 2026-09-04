@@ -32,7 +32,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -81,10 +81,38 @@ app.mount(
 app.mount("/static/clips", StaticFiles(directory=config.CLIPS_DIR), name="clips")
 
 _DASHBOARD_DIST = os.path.join(config.BASE_DIR, "dashboard", "dist")
-if os.path.isdir(os.path.join(_DASHBOARD_DIST, "assets")):
-    app.mount(
-        "/assets", StaticFiles(directory=os.path.join(_DASHBOARD_DIST, "assets")), name="assets"
-    )
+_ASSETS_DIR = os.path.join(_DASHBOARD_DIST, "assets")
+
+
+@app.get("/assets/{asset_name}")
+def serve_asset(asset_name: str):
+    """
+    Serve a built asset, self-healing when the request is for a bundle that no
+    longer exists.
+
+    Asset filenames are content-hashed, so a browser holding a cached
+    index.html will ask for a bundle that a later build removed. Returning 404
+    leaves the user on a permanently blank page with no way to recover short of
+    clearing their cache by hand. Instead, a missing script returns a tiny
+    reloader that fetches the page again, cache-busted, which picks up the
+    current index.html and the bundle it actually references.
+    """
+    safe = os.path.basename(asset_name)
+    path = os.path.join(_ASSETS_DIR, safe)
+    if os.path.isfile(path):
+        return FileResponse(path)
+    if safe.endswith(".js"):
+        logger.info("Stale bundle requested (%s); returning reloader", safe)
+        return Response(
+            content=(
+                "/* This build is no longer present. Reload to the current one. */ "
+                "(function(){try{sessionStorage.removeItem('vgReloaded');}catch(e){}"
+                "location.replace(location.pathname+'?v='+Date.now());})();"
+            ),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+    raise HTTPException(status_code=404, detail="Asset not found")
 
 # One processor (one loaded model) shared across requests. Analysis runs in the
 # background threadpool; loading the model per request would be far slower.

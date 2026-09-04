@@ -9,5 +9,21 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script id="vg-boot-check">
+      // If the bundle failed to load (typically a cached index.html pointing at
+      // a bundle that no longer exists), the root stays empty. Reload once,
+      // cache-busted, rather than leaving the user on a dead page.
+      setTimeout(function () {
+        var root = document.getElementById('root');
+        if (root && root.childElementCount === 0 && !sessionStorage.getItem('vgReloaded')) {
+          sessionStorage.setItem('vgReloaded', '1');
+          location.replace(location.pathname + '?v=' + Date.now());
+        }
+      }, 4000);
+      window.addEventListener('load', function () {
+        var root = document.getElementById('root');
+        if (root && root.childElementCount > 0) sessionStorage.removeItem('vgReloaded');
+      });
+    </script>
   </body>
 </html>
