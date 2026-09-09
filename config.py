@@ -79,28 +79,21 @@ FALLBACK_MODEL_PATH = _env("YOLO_MODEL_PATH", "yolov8n.pt")
 USE_OPEN_VOCAB = _env_bool("USE_OPEN_VOCAB", True)
 
 PERSON_CONF = _env_float("PERSON_CONF", 0.25)
-PRODUCT_CONF = _env_float("PRODUCT_CONF", 0.12)
+PRODUCT_CONF = _env_float("PRODUCT_CONF", 0.10)
 EQUIPMENT_CONF = _env_float("EQUIPMENT_CONF", 0.20)
 IOU_THRESHOLD = _env_float("IOU_THRESHOLD", 0.45)
-# 512 rather than 640: measured on the pilot clips, the smaller size is ~15%
-# faster per frame with no loss in person or product detection rate.
-INFERENCE_IMGSZ = _env_int("INFERENCE_IMGSZ", 512)
+INFERENCE_IMGSZ = _env_int("INFERENCE_IMGSZ", 416)
 
-# Frames actually sent to the detector: 1 = every frame, 3 = every third frame.
-# Inference is ~84% of analysis time, so the stride is the dominant speed
-# control. 5 keeps ~6 samples/second at 30fps, which is still well inside the
-# grace windows the behaviour detectors use.
-DETECTION_FRAME_STRIDE = _env_int("DETECTION_FRAME_STRIDE", 5)
+# Frames actually sent to the detector: 1 = every frame, 2 = every 2nd frame, 3 = every 3rd frame (~10 Hz).
+DETECTION_FRAME_STRIDE = _env_int("DETECTION_FRAME_STRIDE", 3)
 # Longest edge the frame is resized to before inference (0 = native resolution).
-# Downscale before inference. Kept at/near the inference size so the frame is
-# not resized twice for no benefit.
-MAX_INFERENCE_WIDTH = _env_int("MAX_INFERENCE_WIDTH", 768)
+MAX_INFERENCE_WIDTH = _env_int("MAX_INFERENCE_WIDTH", 512)
 
 # --- Behaviour engine -------------------------------------------------------
 # Minimum seconds between two alerts of the same behaviour on the same track.
-ALERT_COOLDOWN_SEC = _env_float("ALERT_COOLDOWN_SEC", 4.0)
+ALERT_COOLDOWN_SEC = _env_float("ALERT_COOLDOWN_SEC", 8.0)
 # A track must be observed this long before behaviour reasoning trusts it.
-MIN_TRACK_AGE_SEC = _env_float("MIN_TRACK_AGE_SEC", 0.35)
+MIN_TRACK_AGE_SEC = _env_float("MIN_TRACK_AGE_SEC", 0.50)
 
 # --- Evidence ---------------------------------------------------------------
 EVIDENCE_CLIP_PRE_SEC = _env_float("EVIDENCE_CLIP_PRE_SEC", 2.0)

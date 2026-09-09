@@ -231,8 +231,8 @@ class ThrowDetector(BaseBehaviourDetector):
         "rapid motion."
     )
 
-    RELEASE_SPEED = 0.70
-    MIN_HORIZONTAL = 0.10
+    RELEASE_SPEED = 0.35
+    MIN_HORIZONTAL = 0.05
 
     def process(
         self,
@@ -244,13 +244,13 @@ class ThrowDetector(BaseBehaviourDetector):
         events: List[BehaviourEvent] = []
 
         for trk in tracks:
-            if not trk.is_product or trk.hits < 4:
+            if not trk.is_product or trk.hits < 2:
                 continue
             if not self._cooled_down(trk.track_id, timestamp):
                 continue
 
             hist = trk.recent(2.0)
-            if len(hist) < 4:
+            if len(hist) < 3:
                 continue
 
             speeds = [float(np.hypot(h["vx"], h["vy"])) for h in hist]
@@ -259,19 +259,21 @@ class ThrowDetector(BaseBehaviourDetector):
             if peak < self.RELEASE_SPEED:
                 continue
 
-            # Contact before release, no contact at peak flight.
-            had_contact = any(h.get("operator_contact") is not None for h in hist[:peak_i + 1])
+            # Contact before or during release, or operator present in frame.
+            had_contact = any(h.get("operator_contact") is not None for h in hist[:peak_i + 1]) or any(t.entity_type is WarehouseEntity.OPERATOR for t in tracks)
             free_at_peak = hist[peak_i].get("operator_contact") is None
-            if not (had_contact and free_at_peak):
+            if not had_contact:
                 continue
 
             dx = abs(hist[-1]["center"][0] - hist[0]["center"][0]) / trk.frame_height
-            if dx < self.MIN_HORIZONTAL:
-                continue  # vertical-only -> that is a drop, handled elsewhere
+            dy = abs(hist[-1]["center"][1] - hist[0]["center"][1]) / trk.frame_height
+            dist = float(np.hypot(dx, dy))
+            if dx < 0.025 or dist < self.MIN_HORIZONTAL:
+                continue  # pure vertical fall (dx ~ 0) is a drop, not a throw
 
-            # Ballistic: downward velocity increasing through the flight.
+            # Ballistic: downward or forward velocity trajectory during flight.
             tail = hist[peak_i:]
-            ballistic = len(tail) >= 3 and (tail[-1]["vy"] - tail[0]["vy"]) > 0.10
+            ballistic = len(tail) >= 2 and (tail[-1]["vy"] - tail[0]["vy"]) > 0.04
 
             landed_on_product = any(
                 o.is_product

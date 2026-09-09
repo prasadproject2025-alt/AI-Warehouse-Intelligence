@@ -156,7 +156,7 @@ export default function App() {
   const [sessionId] = useState(
     () => `batch_s${Math.random().toString(36).slice(2, 10)}`
   );
-  const [scope, setScope] = useState(sessionId);
+  const [scope, setScope] = useState('');
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchError, setBatchError] = useState('');
   // How many videos are in the library, so the button can say what it will run.
@@ -544,8 +544,8 @@ export default function App() {
           <span className="dataset-label">Dataset</span>
           <select className="select" value={scope} disabled={!!activeBatch}
             onChange={e => setScope(e.target.value)}>
-            <option value={sessionId}>This session</option>
-            <option value="">All stored analysis</option>
+            <option value="">All pre-analysed footage ({libraryCount || videos.length} videos)</option>
+            <option value={sessionId}>This session (new run)</option>
             {batches.map(b => (
               <option key={b.batch_id} value={b.batch_id}>
                 Run {b.batch_id.replace("batch_", "")} — {b.videos} videos, {b.incidents} events
@@ -553,7 +553,7 @@ export default function App() {
             ))}
           </select>
           {scope && (
-            <button className="link-btn" onClick={() => setScope("")}>show all</button>
+            <button className="link-btn" onClick={() => setScope("")}>show pre-analysed</button>
           )}
         </div>
 
@@ -759,7 +759,7 @@ export default function App() {
 
       {activeTab === 'analytics' && (
         <main className="dashboard-content single">
-          <AnalyticsView analytics={analytics} />
+          <AnalyticsView analytics={analytics} onRefresh={() => { refreshVideos(true); refreshAnalytics(); }} />
         </main>
       )}
 
@@ -1214,7 +1214,7 @@ function IncidentDetail({ incident, onReview, onSeek }) {
   );
 }
 
-function AnalyticsView({ analytics }) {
+function AnalyticsView({ analytics, onRefresh }) {
   if (!analytics) return <div className="card"><EmptyState icon={Loader2} title="Loading analytics…" /></div>;
   if (analytics.total_incidents === 0) {
     return (
@@ -1231,7 +1231,14 @@ function AnalyticsView({ analytics }) {
   return (
     <>
       <div className="card pad">
-        <h2 className="section-title"><BarChart3 size={18} /> Behaviour Pareto</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 className="section-title"><BarChart3 size={18} /> Behaviour Pareto</h2>
+          {onRefresh && (
+            <button className="ghost-btn" style={{ padding: '4px 10px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }} onClick={onRefresh} title="Refresh analytics data">
+              <RefreshCw size={14} /> Refresh analytics
+            </button>
+          )}
+        </div>
         <p className="section-note">
           Counts are of detected events across {analytics.total_footage_minutes.toFixed(1)} minutes
           of analysed footage. Focusing on the top bars removes most of the risk.

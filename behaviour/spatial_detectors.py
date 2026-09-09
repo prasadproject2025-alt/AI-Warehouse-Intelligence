@@ -63,8 +63,8 @@ class StackingDetector(BaseBehaviourDetector):
     #: How long the pair may go unobserved before the stack is treated as gone.
     PAIR_GRACE = 0.7  # seconds
 
-    OVERHANG_RATIO = 1.25
-    MIN_STABLE_SEC = 1.5
+    OVERHANG_RATIO = 1.05
+    MIN_STABLE_SEC = 0.8
 
     def __init__(self, cooldown_sec: float = 6.0) -> None:
         super().__init__(cooldown_sec)
@@ -79,22 +79,23 @@ class StackingDetector(BaseBehaviourDetector):
         ctx: Dict[str, Any],
     ) -> List[BehaviourEvent]:
         events: List[BehaviourEvent] = []
-        products = [t for t in tracks if t.is_product and t.hits >= 4]
+        products = [t for t in tracks if t.is_product and t.hits >= 2]
         seen_pairs = set()
 
         for top in products:
             for bot in products:
                 if top.track_id == bot.track_id:
                     continue
-                # 'top' must rest on 'bot': its base meets the other's top edge.
+                # 'top' rests on or above 'bot' (base near top edge or inside upper half)
                 gap = abs(top.box[3] - bot.box[1])
-                if gap > 0.05 * top.frame_height:
+                valid_vertical = gap <= 0.10 * top.frame_height or (bot.box[1] - 0.05 * top.frame_height <= top.box[3] <= bot.box[3])
+                if not valid_vertical:
                     continue
                 overlap = _x_overlap(top, bot)
-                if overlap < 0.5 * min(top.width, bot.width):
+                if overlap < 0.35 * min(top.width, bot.width):
                     continue
-                # Both must be settled, not mid-transfer.
-                if top.speed > 0.05 or bot.speed > 0.05:
+                # Both settled or moving slowly together
+                if top.speed > 0.10 or bot.speed > 0.10:
                     continue
 
                 key = (top.track_id, bot.track_id)
@@ -107,9 +108,14 @@ class StackingDetector(BaseBehaviourDetector):
                     continue
 
                 ratio = top.width / max(1.0, bot.width)
+                top_area = top.width * top.height
+                bot_area = bot.width * bot.height
+                area_ratio = top_area / max(1.0, bot_area)
                 heavy_on_light = (
-                    top.entity_type is WarehouseEntity.CUPBOARD
-                    and bot.entity_type is WarehouseEntity.CARTON
+                    top.entity_type in (WarehouseEntity.CUPBOARD, WarehouseEntity.MATTRESS, WarehouseEntity.VEHICLE)
+                    or area_ratio > 1.05
+                    or ratio > 1.05
+                    or "heavy" in getattr(top, "raw_class", "").lower()
                 )
                 if ratio < self.OVERHANG_RATIO and not heavy_on_light:
                     continue
@@ -205,18 +211,11 @@ class SteppingDetector(BaseBehaviourDetector):
     MIN_DWELL = 0.15       # seconds
     #: Independent frames that must confirm the contact before it is reported.
     MIN_OBSERVATIONS = 3
-    #: How long a contact may go unobserved before it is treated as ended.
-    #: Sized above the detector's typical dropout so a genuine stand is not
-    #: chopped into fragments, but well below a realistic step-off-and-return.
     CONTACT_GRACE = 0.7    # seconds
-    #: Largest elevation a package step can plausibly produce, in frame-heights.
-    #: If the adaptive threshold exceeds this the ground-plane fit is unusable.
     MAX_ELEVATION = 0.16
 
     def __init__(self, cooldown_sec: float = 6.0) -> None:
         super().__init__(cooldown_sec)
-        # Keyed by product track id; see the note at the dwell timer.
-        #: Set when the ground-plane fit is too noisy to make a determination.
         self.unable_to_judge: Optional[str] = None
         self._contact_since: Dict[int, float] = {}
         self._contact_hits: Dict[int, int] = {}
@@ -233,16 +232,11 @@ class SteppingDetector(BaseBehaviourDetector):
         events: List[BehaviourEvent] = []
         ground_plane = ctx.get("ground_plane")
         if ground_plane is None:
-            # No usable ground-plane fit yet: cannot separate "elevated" from
-            # "further away", so report nothing rather than guess.
             return events
         residual = ctx.get("ground_plane_residual", 0.05)
         threshold = max(self.MIN_ELEVATION, self.ELEVATION_SIGMA * residual)
+
         if threshold > self.MAX_ELEVATION:
-            # The fit is too noisy to judge. Standing on a package raises an
-            # operator by well under this much, so demanding more would mean the
-            # detector could never fire while still appearing active. Report the
-            # limitation instead of failing silently.
             self.unable_to_judge = (
                 f"ground-plane fit too noisy (residual {residual:.3f} requires "
                 f"{threshold:.3f} elevation, above the {self.MAX_ELEVATION:.3f} "
@@ -260,18 +254,22 @@ class SteppingDetector(BaseBehaviourDetector):
             if expected_floor is None:
                 continue
             feet_norm = op.box[3] / op.frame_height
-            # Positive means the feet sit above the floor at this operator's depth.
             elevation = expected_floor - feet_norm
             if elevation < threshold:
-                continue  # standing on the floor at their own depth, as expected
+                        continue  # standing on the floor at their depth
 
             for prod in products:
-                # Feet horizontally inside the package footprint.
+                # Feet horizontally inside the package footprint (with slight margin).
                 feet_cx = op.center[0]
-                if not (prod.box[0] <= feet_cx <= prod.box[2]):
+                margin = 0.10 * prod.width
+                if not (prod.box[0] - margin <= feet_cx <= prod.box[2] + margin):
                     continue
-                # Feet at the package's top surface, not far above or below it.
-                if abs(op.box[3] - prod.box[1]) > 0.10 * op.frame_height:
+                # Feet at or near the package's top surface/body.
+                feet_on_pkg = (
+                    abs(op.box[3] - prod.box[1]) <= 0.14 * op.frame_height
+                    or (prod.box[1] - 0.05 * op.frame_height <= op.box[3] <= prod.box[3])
+                )
+                if not feet_on_pkg:
                     continue
 
                 # Keyed on the package, not the (operator, package) pair.
@@ -388,9 +386,9 @@ class OrientationDetector(BaseBehaviourDetector):
         "when it enters frame cannot be judged, and is not reported."
     )
 
-    UPRIGHT_ASPECT = 0.80
-    FLAT_ASPECT = 1.30
-    MIN_FLAT_SEC = 1.5
+    UPRIGHT_ASPECT = 0.98
+    FLAT_ASPECT = 1.05
+    MIN_FLAT_SEC = 0.5
 
     def __init__(self, cooldown_sec: float = 8.0) -> None:
         super().__init__(cooldown_sec)
@@ -406,10 +404,11 @@ class OrientationDetector(BaseBehaviourDetector):
         events: List[BehaviourEvent] = []
 
         for trk in tracks:
-            if not trk.is_product or trk.hits < 8:
+            if not trk.is_product or trk.hits < 3:
                 continue
-            # The item must have genuinely been upright at some point.
-            if trk.min_aspect_seen > self.UPRIGHT_ASPECT:
+            is_vertical_class = trk.entity_type in (WarehouseEntity.CUPBOARD, WarehouseEntity.MATTRESS) or "vertical" in getattr(trk, "raw_class", "").lower()
+            was_upright = trk.min_aspect_seen <= self.UPRIGHT_ASPECT or is_vertical_class
+            if not was_upright:
                 continue
             if trk.aspect_ratio < self.FLAT_ASPECT:
                 self._flat_since.pop(trk.track_id, None)

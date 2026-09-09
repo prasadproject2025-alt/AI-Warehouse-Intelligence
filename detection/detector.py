@@ -161,13 +161,16 @@ class WarehouseDetector:
         h, w = frame.shape[:2]
         min_side = max(12.0, 0.012 * min(h, w))  # resolution-relative noise floor
 
-        results = self.model.predict(
-            frame,
-            imgsz=config.INFERENCE_IMGSZ,
-            conf=self._base_conf,
-            iou=self.iou_threshold,
-            verbose=False,
-        )[0]
+        import torch
+
+        with torch.inference_mode():
+            results = self.model.predict(
+                frame,
+                imgsz=config.INFERENCE_IMGSZ,
+                conf=self._base_conf,
+                iou=self.iou_threshold,
+                verbose=False,
+            )[0]
 
         detections: List[Detection] = []
         if results.boxes is None or len(results.boxes) == 0:
