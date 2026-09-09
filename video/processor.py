@@ -356,11 +356,40 @@ class VideoProcessor:
         self, video_path: str, pending: List[Dict[str, Any]], incidents: List[Dict[str, Any]]
     ) -> None:
         by_id = {i["id"]: i for i in incidents}
-        for item in pending:
+        priority_map = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+        # Sort pending by risk priority first, then timestamp
+        sorted_pending = sorted(
+            pending,
+            key=lambda item: (
+                priority_map.get(by_id.get(item["id"], {}).get("risk_level", "LOW"), 9),
+                item["timestamp_sec"],
+            ),
+        )
+
+        generated_clips: List[Dict[str, Any]] = []
+        max_clips = 6
+
+        for item in sorted_pending:
+            t = item["timestamp_sec"]
+            # If an existing clip covers this timestamp within 2.5s, reuse it!
+            matched = next(
+                (gc for gc in generated_clips if abs(gc["timestamp_sec"] - t) <= 2.5),
+                None,
+            )
+            if matched:
+                inc = by_id.get(item["id"])
+                if inc is not None and matched.get("path"):
+                    inc["evidence_clip_path"] = matched["path"]
+                    DatabaseManager.save_incident(inc)
+                continue
+
+            if len(generated_clips) >= max_clips:
+                continue
+
             try:
                 path = write_incident_clip(
                     video_path,
-                    item["timestamp_sec"],
+                    t,
                     os.path.join(self.clips_dir, f"clip_{item['id']}.mp4"),
                     pre_sec=config.EVIDENCE_CLIP_PRE_SEC,
                     post_sec=config.EVIDENCE_CLIP_POST_SEC,
@@ -368,7 +397,9 @@ class VideoProcessor:
             except Exception:  # noqa: BLE001
                 logger.exception("Evidence clip failed for %s", item["id"])
                 continue
+
             if path:
+                generated_clips.append({"timestamp_sec": t, "path": path})
                 inc = by_id.get(item["id"])
                 if inc is not None:
                     inc["evidence_clip_path"] = path

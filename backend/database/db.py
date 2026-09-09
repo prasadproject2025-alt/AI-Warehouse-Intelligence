@@ -168,6 +168,17 @@ class DatabaseManager:
             conn.commit()
             return cur.rowcount
 
+    @staticmethod
+    def delete_video_by_filename(filename: str) -> int:
+        with _write_lock, get_connection() as conn:
+            conn.execute(
+                "DELETE FROM incidents WHERE video_id IN (SELECT id FROM videos WHERE filename = ?)",
+                (filename,),
+            )
+            cur = conn.execute("DELETE FROM videos WHERE filename = ?", (filename,))
+            conn.commit()
+            return cur.rowcount
+
     # ------------------------------------------------------------- incidents
     @staticmethod
     def save_incident(incident_data: Dict[str, Any]) -> None:
@@ -441,16 +452,18 @@ class DatabaseManager:
             ]
 
     @staticmethod
-    def clear_analysis(batch_id: Optional[str] = None) -> int:
+    def clear_analysis(batch_id: Optional[str] = None, include_live: bool = False) -> int:
         """
-        Remove analysis rows. Scoped to a batch when given, otherwise every
-        non-live video. Live sessions are left alone so a running monitor is
-        not silently orphaned.
+        Remove analysis rows. Scoped to a batch when given.
+        If include_live is True, removes all videos including real-time live sessions.
         """
         with _write_lock, get_connection() as conn:
             if batch_id:
                 conn.execute("DELETE FROM incidents WHERE batch_id = ?", (batch_id,))
                 cur = conn.execute("DELETE FROM videos WHERE batch_id = ?", (batch_id,))
+            elif include_live:
+                conn.execute("DELETE FROM incidents")
+                cur = conn.execute("DELETE FROM videos")
             else:
                 conn.execute(
                     "DELETE FROM incidents WHERE video_id IN "

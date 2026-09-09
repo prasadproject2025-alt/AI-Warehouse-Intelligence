@@ -620,9 +620,11 @@ def cancel_batch(batch_id: str):
 
 
 class ResetRequest(BaseModel):
-    """Clear stored analysis. Source videos in the library are never touched."""
+    """Clear stored analysis, live sessions, and uploaded videos."""
 
     delete_evidence: bool = True
+    delete_uploads: bool = True
+    include_live: bool = True
 
 
 @app.post("/api/reset")
@@ -630,19 +632,19 @@ def reset_analysis(req: ResetRequest):
     """
     Return the system to a clean slate.
 
-    Removes every analysed video row, incident, batch and generated artefact,
-    but never the source videos in the library, so the dataset can simply be
-    analysed again. Any live session is stopped first, otherwise it would keep
-    writing rows into the database that was just cleared.
+    Removes every analysed video row, incident, batch, live session, uploaded raw video,
+    and generated artefact. Canonical pilot videos in the library are preserved.
     """
     for session in live_manager.list():
         live_manager.stop(session["session_id"])
+    with live_manager._lock:
+        live_manager._sessions.clear()
 
     for state in list(batch_runner.BATCH_STATUS.values()):
         batch_runner.cancel(state["batch_id"])
     batch_runner.BATCH_STATUS.clear()
 
-    removed = DatabaseManager.clear_analysis()
+    removed = DatabaseManager.clear_analysis(include_live=req.include_live)
     TASK_STATUS.clear()
 
     files_removed = 0
@@ -662,11 +664,27 @@ def reset_analysis(req: ResetRequest):
                     except OSError:
                         logger.warning("Could not remove %s", path)
 
-    logger.info("Reset: %d video row(s), %d artefact(s)", removed, files_removed)
+    uploads_removed = 0
+    if req.delete_uploads and os.path.isdir(config.RAW_VIDEOS_DIR):
+        for name in os.listdir(config.RAW_VIDEOS_DIR):
+            if name.startswith("vid_"):
+                path = os.path.join(config.RAW_VIDEOS_DIR, name)
+                if os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                        uploads_removed += 1
+                    except OSError:
+                        logger.warning("Could not remove uploaded video %s", path)
+
+    logger.info(
+        "Reset: %d video row(s), %d artefact(s), %d upload(s)",
+        removed, files_removed, uploads_removed,
+    )
     return {
         "status": "reset",
         "videos_removed": removed,
         "files_removed": files_removed,
+        "uploads_removed": uploads_removed,
         "library_size": len(batch_runner.library_videos()),
     }
 

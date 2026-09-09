@@ -91,7 +91,7 @@ class BrowserVideoWriter:
                 "-i", "-",
                 "-an",
                 "-c:v", "libx264",
-                "-preset", "veryfast",
+                "-preset", "ultrafast",
                 "-crf", str(crf),
                 # yuv420p is required for broad browser/device compatibility.
                 "-pix_fmt", "yuv420p",

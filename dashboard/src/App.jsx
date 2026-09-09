@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, BarChart3, Bot, CheckCircle2, ClipboardCheck, Crosshair, Eye,
-  FileVideo, GraduationCap, Layers, Loader2, MapPin, RefreshCw, Search, Send,
+  FileVideo, GraduationCap, Layers, Loader2, MapPin, RefreshCw, RotateCw, Search, Send,
   Radio, RotateCcw, ShieldAlert, Sparkles, Square, Upload, Video, XCircle,
 } from 'lucide-react';
 
@@ -178,24 +178,24 @@ export default function App() {
 
 
   const resetAll = async () => {
-    // Clears stored analysis only. The videos in the library stay, so the
-    // dataset can be analysed again immediately.
+    // Clears stored analysis, incidents, live sessions, and uploaded videos.
     if (!window.confirm(
-      "Reset will delete all analysis results, incidents and generated evidence.\n\n"
-      + "Your source videos are kept. Continue?"
+      "Reset will delete all analysis results, incidents, live sessions, and uploaded videos.\n\n"
+      + "Canonical warehouse footage will remain available to re-analyse. Continue?"
     )) return;
     setBatchBusy(true); setBatchError("");
     try {
       const r = await fetch("/api/reset", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delete_evidence: true }),
+        body: JSON.stringify({ delete_evidence: true, delete_uploads: true, include_live: true }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || "Reset failed");
-      setScope(`batch_s${Math.random().toString(36).slice(2, 10)}`);
+      setScope("");
       setSelectedVideo(null);
       setIncidents([]);
       setSelectedIncident(null);
+      setLiveSession(null);
       await refreshBatches();
       await refreshVideos(false);
       await refreshAnalytics();
@@ -206,12 +206,12 @@ export default function App() {
     }
   };
 
-  const runBatch = async (videos = []) => {
+  const runBatch = async (videos = [], replace_existing = true) => {
     setBatchBusy(true); setBatchError('');
     try {
       const r = await fetch('/api/batches/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videos, replace_existing: true }),
+        body: JSON.stringify({ videos, replace_existing }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || 'Could not start the analysis run');
@@ -220,6 +220,11 @@ export default function App() {
       setBatchError(e.message);
       setBatchBusy(false);
     }
+  };
+
+  const reanalyseCurrentVideo = async () => {
+    if (!selectedVideo || !selectedVideo.filename) return;
+    await runBatch([selectedVideo.filename], false);
   };
 
   /* ------------------------------------------------------------- data load */
@@ -583,10 +588,10 @@ export default function App() {
                 <RotateCcw size={14} /> Reset
               </button>
               <button className={`primary-btn ${batchBusy ? "disabled" : ""}`}
-                onClick={() => runBatch()} disabled={batchBusy}>
+                onClick={() => runBatch()} disabled={batchBusy} title="Run analysis across all library videos">
                 {batchBusy
-                  ? (<><Loader2 size={15} className="spin" /> Starting</>)
-                  : (<><Layers size={15} /> Analyse dataset ({libraryCount} videos)</>)}
+                  ? (<><Loader2 size={15} className="spin" /> Analysing batch…</>)
+                  : (<><Layers size={15} /> Analyse all library videos ({libraryCount})</>)}
               </button>
             </>
           )}
@@ -622,6 +627,18 @@ export default function App() {
                   <span>{selectedVideo?.filename || 'No video selected'}</span>
                 </div>
                 <div className="header-controls">
+                  {selectedVideo && (
+                    <button
+                      className="ghost-btn reanalyse-btn"
+                      title="Re-analyse only this video (~5-8s)"
+                      disabled={batchBusy || !!activeBatch}
+                      onClick={reanalyseCurrentVideo}
+                      style={{ padding: '5px 12px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <RotateCw size={13} className={batchBusy && activeBatch?.current === selectedVideo?.filename ? "spin" : ""} />
+                      <span>Re-analyse this video</span>
+                    </button>
+                  )}
                   {selectedVideo?.annotated_video_url && (
                     <div className="toggle-group">
                       <button className={showAnnotated ? 'active' : ''} onClick={() => setShowAnnotated(true)}>AI overlay</button>

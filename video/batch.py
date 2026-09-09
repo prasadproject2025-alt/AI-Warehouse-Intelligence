@@ -146,6 +146,8 @@ def _run_batch(
                 continue
 
             try:
+                if not replace_existing:
+                    DatabaseManager.delete_video_by_filename(name)
                 result = processor.process_video(
                     path,
                     scene=_scene_for(name, scene_overrides),
