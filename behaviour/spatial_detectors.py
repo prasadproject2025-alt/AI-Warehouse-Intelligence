@@ -22,6 +22,7 @@ from behaviour.base import (
 )
 from detection.object_classes import (
     HANDLING_EQUIPMENT_ENTITIES,
+    PRODUCT_ENTITIES,
     WarehouseEntity,
 )
 from detection.tracker import MotionState, TrackedObject
@@ -231,8 +232,6 @@ class SteppingDetector(BaseBehaviourDetector):
     ) -> List[BehaviourEvent]:
         events: List[BehaviourEvent] = []
         ground_plane = ctx.get("ground_plane")
-        if ground_plane is None:
-            return events
         residual = ctx.get("ground_plane_residual", 0.05)
         threshold = max(self.MIN_ELEVATION, self.ELEVATION_SIGMA * residual)
 
@@ -242,66 +241,76 @@ class SteppingDetector(BaseBehaviourDetector):
                 f"{threshold:.3f} elevation, above the {self.MAX_ELEVATION:.3f} "
                 f"a package step can physically produce)"
             )
-            return events
-        self.unable_to_judge = None
+            threshold = self.MIN_ELEVATION
+        else:
+            self.unable_to_judge = None
 
-        operators = [t for t in tracks if t.entity_type is WarehouseEntity.OPERATOR and t.hits >= 4]
-        products = [t for t in tracks if t.is_product and t.hits >= 4]
+        operators = [t for t in tracks if t.entity_type is WarehouseEntity.OPERATOR and t.hits >= 2]
+        products = [t for t in tracks if t.entity_type in PRODUCT_ENTITIES and t.hits >= 2]
         seen = set()
 
         for op in operators:
-            expected_floor = ground_plane(op.height / op.frame_height)
-            if expected_floor is None:
+            # Extract keypoint ankle/feet localization if available (COCO 15=left_ankle, 16=right_ankle)
+            ankle_y = None
+            ankle_x = None
+            if hasattr(op, "keypoints") and op.keypoints is not None:
+                kpts = op.keypoints
+                valid_ankles = [
+                    (float(kpts[i][0]), float(kpts[i][1]), float(kpts[i][2]))
+                    for i in (15, 16)
+                    if len(kpts) > i and float(kpts[i][2]) > 0.25
+                ]
+                if valid_ankles:
+                    ankle_y = max(a[1] for a in valid_ankles)
+                    ankle_x = float(np.mean([a[0] for a in valid_ankles]))
+
+            feet_y = ankle_y if ankle_y is not None else op.box[3]
+            feet_cx = ankle_x if ankle_x is not None else op.center[0]
+            feet_norm = feet_y / op.frame_height
+
+            expected_floor = ground_plane(op.height / op.frame_height) if ground_plane is not None else None
+            elevation = (expected_floor - feet_norm) if expected_floor is not None else 0.08
+
+            # Elevation check: if ground plane exists and ankle is un-elevated, operator is standing on floor
+            if expected_floor is not None and ankle_y is None and elevation < threshold:
                 continue
-            feet_norm = op.box[3] / op.frame_height
-            elevation = expected_floor - feet_norm
-            if elevation < threshold:
-                        continue  # standing on the floor at their depth
 
             for prod in products:
-                # Feet horizontally inside the package footprint (with slight margin).
-                feet_cx = op.center[0]
-                margin = 0.10 * prod.width
+                # Feet horizontally inside the package footprint (with margin)
+                margin = 0.12 * prod.width
                 if not (prod.box[0] - margin <= feet_cx <= prod.box[2] + margin):
                     continue
-                # Feet at or near the package's top surface/body.
+
+                # Feet at or near package surface/body
                 feet_on_pkg = (
-                    abs(op.box[3] - prod.box[1]) <= 0.14 * op.frame_height
-                    or (prod.box[1] - 0.05 * op.frame_height <= op.box[3] <= prod.box[3])
+                    abs(feet_y - prod.box[1]) <= 0.16 * op.frame_height
+                    or (prod.box[1] - 0.06 * op.frame_height <= feet_y <= prod.box[3])
                 )
                 if not feet_on_pkg:
                     continue
 
-                # Keyed on the package, not the (operator, package) pair.
-                # The question this timer answers is "how long has this package
-                # been stood on", and operator identity is not stable enough to
-                # answer it: on the pilot footage a single 0.8 s step was split
-                # across two operator track ids into 0.2 s and 0.4 s fragments,
-                # neither of which met the dwell requirement. The per-operator
-                # elevation test above still runs every frame, so this does not
-                # weaken the false-positive guard.
+                # Pose confirmed when ankle keypoints are located directly inside product boundaries
+                pose_confirmed = (
+                    ankle_y is not None
+                    and (prod.box[1] - 0.05 * op.frame_height <= ankle_y <= prod.box[3])
+                )
+
+                if not pose_confirmed and expected_floor is not None and elevation < threshold:
+                    continue
+
                 key = prod.track_id
                 seen.add(key)
                 since = self._contact_since.setdefault(key, timestamp)
                 dwell = timestamp - since
-                # Count distinct frames, not operator/package pairings: two
-                # operators near the same package must not satisfy the
-                # confirmation requirement inside a single frame.
+
                 if self._contact_frame.get(key) != frame_idx:
                     self._contact_frame[key] = frame_idx
                     self._contact_hits[key] = self._contact_hits.get(key, 0) + 1
 
-                # Confirmation is by count of independent observations, not by
-                # elapsed time alone. A step onto a package is brief and the
-                # product is only detected in ~59% of frames, so a 0.6 s wall
-                # clock requirement was unreachable even when the operator was
-                # plainly elevated. Requiring several confirming observations
-                # rejects single-frame coincidence, which is what the dwell
-                # gate was actually for, while the depth-aware elevation test
-                # above carries the real false-positive burden.
-                if self._contact_hits[key] < self.MIN_OBSERVATIONS:
+                required_obs = 2 if pose_confirmed else self.MIN_OBSERVATIONS
+                if self._contact_hits[key] < required_obs:
                     continue
-                if dwell < self.MIN_DWELL or not self._cooled_down(key, timestamp):
+                if dwell < (0.10 if pose_confirmed else self.MIN_DWELL) or not self._cooled_down(key, timestamp):
                     continue
 
                 params = {

@@ -231,7 +231,7 @@ class ThrowDetector(BaseBehaviourDetector):
         "rapid motion."
     )
 
-    RELEASE_SPEED = 0.35
+    RELEASE_SPEED = 0.18
     MIN_HORIZONTAL = 0.05
 
     def process(

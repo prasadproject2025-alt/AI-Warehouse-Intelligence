@@ -242,6 +242,9 @@ class LiveSession:
                     inv = 1.0 / infer_scale
                     for d in detections:
                         d.box = [v * inv for v in d.box]
+                        if getattr(d, "keypoints", None) is not None:
+                            d.keypoints[:, 0] *= inv
+                            d.keypoints[:, 1] *= inv
 
                 effective_fps = max(1.0, self.analysed_fps or 5.0)
                 tracks = tracker.update(detections, frame_idx, timestamp, effective_fps)

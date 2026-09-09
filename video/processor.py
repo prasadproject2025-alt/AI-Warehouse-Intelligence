@@ -211,6 +211,9 @@ class VideoProcessor:
                     inv = 1.0 / infer_scale
                     for d in detections:
                         d.box = [v * inv for v in d.box]
+                        if getattr(d, "keypoints", None) is not None:
+                            d.keypoints[:, 0] *= inv
+                            d.keypoints[:, 1] *= inv
 
                 active_tracks = tracker.update(detections, frame_idx, timestamp, fps / stride)
                 analysed += 1

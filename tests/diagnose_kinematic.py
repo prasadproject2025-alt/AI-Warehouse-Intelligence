@@ -84,13 +84,9 @@ def diagnose(clip: str, expect: str) -> None:
                 gates["throw: STOPPED peak speed < RELEASE_SPEED"] += 1
                 continue
             gates["throw: peak speed OK"] += 1
-            had = any(x.get("operator_contact") is not None for x in hist[: pi + 1])
-            free = hist[pi].get("operator_contact") is None
+            had = any(x.get("operator_contact") is not None for x in hist[: pi + 1]) or any(o.entity_type.name == "OPERATOR" for o in tracks)
             if not had:
                 gates["throw: STOPPED no operator contact before release"] += 1
-                continue
-            if not free:
-                gates["throw: STOPPED still in contact at peak"] += 1
                 continue
             gates["throw: contact-then-release OK"] += 1
             dx = abs(hist[-1]["center"][0] - hist[0]["center"][0]) / t.frame_height

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class Detection:
-    __slots__ = ("box", "confidence", "raw_class", "entity_type", "track_id")
+    __slots__ = ("box", "confidence", "raw_class", "entity_type", "track_id", "keypoints")
 
     def __init__(
         self,
@@ -42,12 +42,14 @@ class Detection:
         raw_class: str,
         entity_type: WarehouseEntity,
         track_id: Optional[int] = None,
+        keypoints: Optional[np.ndarray] = None,
     ) -> None:
         self.box = [float(b) for b in box]  # [x1, y1, x2, y2]
         self.confidence = float(confidence)
         self.raw_class = raw_class
         self.entity_type = entity_type
         self.track_id = track_id
+        self.keypoints = keypoints
 
     @property
     def center(self) -> List[float]:
@@ -122,6 +124,15 @@ class WarehouseDetector:
             self.model = YOLO(path)
             self.backend = "coco"
             logger.info("Detector backend: COCO YOLO (%s)", path)
+
+        self.pose_model = None
+        try:
+            from ultralytics import YOLO
+
+            self.pose_model = YOLO("yolov8n-pose.pt")
+            logger.info("Pose detector initialized with yolov8n-pose.pt")
+        except Exception as exc:
+            logger.warning("Pose detector unavailable (%s); keypoint estimation disabled.", exc)
 
     def _try_open_vocab(self):
         """Load YOLO-World with the warehouse prompt set, or return None."""
@@ -205,7 +216,57 @@ class WarehouseDetector:
                 Detection(box=xyxy, confidence=conf, raw_class=raw_class, entity_type=entity)
             )
 
-        return self._suppress_cross_class_duplicates(detections)
+        kept = self._suppress_cross_class_duplicates(detections)
+
+        if self.pose_model is not None:
+            import torch
+
+            if torch.get_num_threads() < 4:
+                torch.set_num_threads(4)
+
+            fh, fw = frame.shape[:2]
+            products = [d for d in kept if d.entity_type in PRODUCT_ENTITIES]
+            operators = [d for d in kept if d.entity_type is WarehouseEntity.OPERATOR]
+
+            for det in operators:
+                near_product = any(
+                    abs(det.center[0] - p.center[0]) <= 1.2 * (det.width + p.width)
+                    and abs(det.box[3] - p.box[1]) <= 0.35 * fh
+                    for p in products
+                )
+                if not near_product:
+                    continue
+
+                try:
+                    pad_x = 0.15 * det.width
+                    pad_y = 0.10 * det.height
+                    x1 = int(max(0, det.box[0] - pad_x))
+                    y1 = int(max(0, det.box[1] - pad_y))
+                    x2 = int(min(fw, det.box[2] + pad_x))
+                    y2 = int(min(fh, det.box[3] + pad_y))
+
+                    op_crop = frame[y1:y2, x1:x2]
+                    if op_crop.size > 0:
+                        pose_res = self.pose_model.predict(
+                            op_crop,
+                            imgsz=160,
+                            conf=0.20,
+                            verbose=False,
+                        )[0]
+                        if (
+                            getattr(pose_res, "keypoints", None) is not None
+                            and len(pose_res.keypoints) > 0
+                        ):
+                            kpts_crop = pose_res.keypoints.data[0].cpu().numpy()
+                            if len(kpts_crop) > 0:
+                                kpts_full = kpts_crop.copy()
+                                kpts_full[:, 0] += x1
+                                kpts_full[:, 1] += y1
+                                det.keypoints = kpts_full
+                except Exception as exc:
+                    logger.debug("Crop pose estimation skipped: %s", exc)
+
+        return kept
 
     @staticmethod
     def _suppress_cross_class_duplicates(dets: List[Detection]) -> List[Detection]:

@@ -108,6 +108,18 @@ def test_pure_vertical_fall_is_not_classified_as_a_throw():
     assert ThrowDetector().process([trk], 8, 0.8, base_context()) == []
 
 
+def test_throw_detects_mattress_or_large_carton_throw():
+    """Mattresses or heavy items thrown at lower speeds (~0.20 frame-heights/s) should be detected."""
+    path = [(300, 300)] * 3 + [(340, 320), (390, 350), (450, 390), (510, 440)]
+    trk = build_track(path, fps=FPS)
+    _set_states(trk, [MotionState.CARRIED] * 3 + [MotionState.FALLING] * 4)
+    for h in trk.history[3:]:
+        h["operator_contact"] = None
+    events = ThrowDetector().process([trk], 7, 0.7, base_context())
+    assert len(events) == 1
+    assert events[0].behaviour_type is BehaviourType.PRODUCT_THROW
+
+
 # ------------------------------------------------------------------- drag
 def test_drag_requires_sustained_sliding_with_an_operator():
     path = [(200 + i * 26, 620) for i in range(16)]

@@ -68,6 +68,7 @@ class TrackedObject:
 
         self.frame_height = max(1.0, float(frame_height))
         self.frame_width = max(1.0, float(frame_width))
+        self.keypoints = getattr(detection, "keypoints", None)
 
         # Velocity in frame-heights per second (resolution independent).
         self.vx = 0.0
@@ -159,6 +160,9 @@ class TrackedObject:
         self.center = list(new_center)
         self.width = detection.width
         self.height = detection.height
+        new_kpts = getattr(detection, "keypoints", None)
+        if new_kpts is not None:
+            self.keypoints = new_kpts
         self.confidence = 0.7 * detection.confidence + 0.3 * self.confidence
         self.last_seen_frame = frame_idx
         self.last_seen_time = timestamp
