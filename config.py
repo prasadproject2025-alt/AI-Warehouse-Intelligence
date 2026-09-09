@@ -79,15 +79,15 @@ FALLBACK_MODEL_PATH = _env("YOLO_MODEL_PATH", "yolov8n.pt")
 USE_OPEN_VOCAB = _env_bool("USE_OPEN_VOCAB", True)
 
 PERSON_CONF = _env_float("PERSON_CONF", 0.25)
-PRODUCT_CONF = _env_float("PRODUCT_CONF", 0.10)
+PRODUCT_CONF = _env_float("PRODUCT_CONF", 0.08)
 EQUIPMENT_CONF = _env_float("EQUIPMENT_CONF", 0.20)
 IOU_THRESHOLD = _env_float("IOU_THRESHOLD", 0.45)
-INFERENCE_IMGSZ = _env_int("INFERENCE_IMGSZ", 416)
+INFERENCE_IMGSZ = _env_int("INFERENCE_IMGSZ", 512)
 
 # Frames actually sent to the detector: 1 = every frame, 2 = every 2nd frame, 3 = every 3rd frame (~10 Hz).
 DETECTION_FRAME_STRIDE = _env_int("DETECTION_FRAME_STRIDE", 3)
 # Longest edge the frame is resized to before inference (0 = native resolution).
-MAX_INFERENCE_WIDTH = _env_int("MAX_INFERENCE_WIDTH", 512)
+MAX_INFERENCE_WIDTH = _env_int("MAX_INFERENCE_WIDTH", 640)
 
 # --- Behaviour engine -------------------------------------------------------
 # Minimum seconds between two alerts of the same behaviour on the same track.

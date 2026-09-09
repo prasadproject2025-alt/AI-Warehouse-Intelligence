@@ -128,9 +128,11 @@ class WarehouseDetector:
         self.pose_model = None
         try:
             from ultralytics import YOLO
+            import os
 
-            self.pose_model = YOLO("yolov8n-pose.pt")
-            logger.info("Pose detector initialized with yolov8n-pose.pt")
+            pose_weight = "yolo11n-pose.pt" if os.path.exists("yolo11n-pose.pt") else "yolov8n-pose.pt"
+            self.pose_model = YOLO(pose_weight)
+            logger.info("Pose detector initialized with %s", pose_weight)
         except Exception as exc:
             logger.warning("Pose detector unavailable (%s); keypoint estimation disabled.", exc)
 

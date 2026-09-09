@@ -229,7 +229,7 @@ class PersistentTracker:
 
     def __init__(
         self,
-        max_lost_frames: int = 12,
+        max_lost_frames: int = 36,
         iou_threshold: float = 0.2,
         frame_height: float = 720.0,
         frame_width: float = 1280.0,
@@ -410,7 +410,19 @@ class PersistentTracker:
         for track_id in list(unmatched_tracks):
             trk = self.tracks[track_id]
             trk.mark_missed()
-            if trk.consecutive_lost > self.max_lost_frames:
+            if trk.consecutive_lost <= self.max_lost_frames:
+                # Extrapolate box position during temporary occlusion (e.g. person standing in front of product)
+                dt = 1.0 / max(fps, 1.0)
+                trk.center[0] += trk.vx * trk.frame_height * dt
+                trk.center[1] += trk.vy * trk.frame_height * dt
+                half_w, half_h = trk.width / 2.0, trk.height / 2.0
+                trk.box = [
+                    trk.center[0] - half_w,
+                    trk.center[1] - half_h,
+                    trk.center[0] + half_w,
+                    trk.center[1] + half_h,
+                ]
+            else:
                 del self.tracks[track_id]
 
         for det_idx in unmatched_detections:
@@ -427,6 +439,7 @@ class PersistentTracker:
         self._annotate_states(timestamp)
         return live
 
-    def confirmed_tracks(self, min_hits: int = 3) -> List[TrackedObject]:
-        """Tracks seen often enough to reason about (suppresses one-frame blips)."""
-        return [t for t in self.tracks.values() if t.hits >= min_hits and t.consecutive_lost == 0]
+    def confirmed_tracks(self, min_hits: int = 3, max_coast: int = 4) -> List[TrackedObject]:
+        """Tracks seen often enough to reason about (suppresses one-frame blips and tolerates temporary occlusion)."""
+        return [t for t in self.tracks.values() if t.hits >= min_hits and t.consecutive_lost <= max_coast]
+

@@ -84,30 +84,60 @@ def draw_hud_overlay(
     return frame
 
 
+def _draw_dashed_rect(
+    img: np.ndarray,
+    pt1: Tuple[int, int],
+    pt2: Tuple[int, int],
+    color: Tuple[int, int, int],
+    thickness: int = 2,
+    dash_len: int = 8,
+) -> None:
+    x1, y1 = max(0, pt1[0]), max(0, pt1[1])
+    x2, y2 = min(img.shape[1] - 1, pt2[0]), min(img.shape[0] - 1, pt2[1])
+    for x in range(x1, x2, dash_len * 2):
+        cv2.line(img, (x, y1), (min(x + dash_len, x2), y1), color, thickness)
+        cv2.line(img, (x, y2), (min(x + dash_len, x2), y2), color, thickness)
+    for y in range(y1, y2, dash_len * 2):
+        cv2.line(img, (x1, y), (x1, min(y + dash_len, y2)), color, thickness)
+        cv2.line(img, (x2, y), (x2, min(y + dash_len, y2)), color, thickness)
+
+
 def draw_track_annotations(frame: np.ndarray, tracked_objects: List[Any]) -> np.ndarray:
     """Draw boxes, persistent track IDs, entity class and current motion state."""
     for trk in tracked_objects:
-        if getattr(trk, "consecutive_lost", 0) > 0 or getattr(trk, "hits", 0) < 2:
+        lost = getattr(trk, "consecutive_lost", 0)
+        hits = getattr(trk, "hits", 0)
+        # Render active tracks as well as coasted tracks temporarily occluded behind operators
+        if lost > 20 or hits < 2:
             continue
         box = [int(b) for b in trk.box]
         color = ENTITY_COLORS.get(trk.entity_type, (200, 200, 200))
         thickness = 2 if trk.entity_type is not WarehouseEntity.OPERATOR else 2
-        cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, thickness)
+
+        if lost > 0:
+            # Draw dashed box for occluded/coasted tracks behind a person
+            dimmed = (int(color[0] * 0.75), int(color[1] * 0.75), int(color[2] * 0.75))
+            _draw_dashed_rect(frame, (box[0], box[1]), (box[2], box[3]), dimmed, thickness)
+        else:
+            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, thickness)
 
         state = getattr(trk, "state", None)
         label = f"#{trk.track_id} {trk.entity_type.value.upper()}"
-        if state is not None and state.value not in ("stationary",):
+        if lost > 0:
+            label += " [BEHIND PERSON]"
+        elif state is not None and state.value not in ("stationary",):
             label += f" [{state.value.upper()}]"
         (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
         ly = max(lh + 4, box[1])
-        cv2.rectangle(frame, (box[0], ly - lh - 6), (box[0] + lw + 8, ly), color, -1)
+        header_color = (int(color[0] * 0.7), int(color[1] * 0.7), int(color[2] * 0.7)) if lost > 0 else color
+        cv2.rectangle(frame, (box[0], ly - lh - 6), (box[0] + lw + 8, ly), header_color, -1)
         cv2.putText(
             frame, label, (box[0] + 4, ly - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.44,
             (20, 20, 20), 1, cv2.LINE_AA,
         )
 
         # Velocity vector (normalised units scaled for visibility).
-        if abs(trk.vx) > 0.05 or abs(trk.vy) > 0.05:
+        if lost == 0 and (abs(trk.vx) > 0.05 or abs(trk.vy) > 0.05):
             cx, cy = int(trk.center[0]), int(trk.center[1])
             scale = frame.shape[0] * 0.25
             tip = (
