@@ -161,6 +161,8 @@ across camera resolutions and zoom levels.
 
 ---
 
+
+
 ## 5. Risk scoring — transparent by construction
 
 Risk is never random and never a bare constant. Each score is a base weight for the behaviour class
