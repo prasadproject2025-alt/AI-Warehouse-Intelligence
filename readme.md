@@ -9,7 +9,7 @@ Built for the Godrej Enterprises Group (GEG) challenge *AI Video Intelligence fo
 [![React](https://img.shields.io/badge/React-Vite-61dafb.svg)](https://vitejs.dev)
 [![YOLO-World](https://img.shields.io/badge/Ultralytics-YOLO--World-FF5722.svg)](https://ultralytics.com)
 
----
+-------
 
 ## 1. What this is
 
